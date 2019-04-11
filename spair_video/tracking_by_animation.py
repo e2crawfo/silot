@@ -25,14 +25,14 @@ def cosine_similarity(a, b, keepdims=False):
 
 class TbaBackbone(ConvNet):
     def __init__(self, check_output_shape=False, **kwargs):
-        layout = [
+        layers = [
             dict(kernel_size=5, strides=1, filters=32, pool=True),
             dict(kernel_size=3, strides=1, filters=64, pool=True),
             dict(kernel_size=1, strides=1, filters=128, pool=True),
             dict(kernel_size=3, strides=1, filters=256, pool=False),
             dict(kernel_size=1, strides=1, filters=20, pool=False),
         ]
-        super().__init__(layout, check_output_shape=False)
+        super().__init__(layers, check_output_shape=False)
 
 
 class TrackingByAnimation(VideoNetwork):
@@ -75,7 +75,7 @@ class TrackingByAnimation(VideoNetwork):
 
         if self.backbone is None:
             self.backbone = self.build_backbone(scope="backbone")
-            self.backbone.layout[-1]['filters'] = self.S
+            self.backbone.layers[-1]['filters'] = self.S
             if "backbone" in self.fixed_weights:
                 self.backbone.fix_variables()
 

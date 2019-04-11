@@ -6,12 +6,13 @@ from dps.hyper import run_experiment
 from dps.utils import Config
 from dps.datasets.base import VisualArithmeticDataset
 from dps.datasets.shapes import RandomShapesDataset
-from dps.utils.tf import MLP, CompositeCell
+from dps.utils.tf import MLP, CompositeCell, RecurrentGridConvNet, ConvNet
 
 from auto_yolo.models.core import Updater
 
-from spair_video.core import SimpleVideoVAE, SimpleVAE_RenderHook
+from spair_video.core import SimpleVideoVAE, SimpleVAE_RenderHook, BackgroundExtractor
 from spair_video.tracking_by_animation import TrackingByAnimation, TbaBackbone, TBA_RenderHook
+from spair_video.sspair import SequentialSpair
 
 
 class MovingMNIST(object):
@@ -81,6 +82,12 @@ basic_config = Config(
     render_step=100,
     max_steps=int(3e5),
 
+    noisy=True,
+    train_reconstruction=True,
+    train_kl=True,
+    reconstruction_weight=1.0,
+    kl_weight=1.0,
+
     get_updater=Updater,
     fixed_weights="",
     fixed_values={},
@@ -96,6 +103,7 @@ env_configs = dict(
 
         n_patch_examples=0,
         image_shape=(48, 48),
+        tile_shape=(48, 48),
         patch_shape=(14, 14),
         object_shape=(14, 14),
         min_digits=1,
@@ -125,6 +133,7 @@ env_configs = dict(
         build_env=MovingShapes,
 
         image_shape=(96, 96),
+        tile_shape=(96, 96),
         patch_shape=(21, 21),
         object_shape=(21, 21),
         min_shapes=1,
@@ -145,6 +154,39 @@ env_configs = dict(
     )
 )
 
+env_configs["moving_background"] = env_configs["easy_shapes"].copy(
+    image_shape=(48, 48),
+    tile_shape=(48, 48),
+    patch_shape=(14, 14),
+    object_shape=(14, 14),
+    min_shapes=2,
+    max_shapes=2,
+    background_cfg=dict(
+        mode="learn_and_transform", A=8, yx_prior_std=1.0, bg_scale=0.75,
+        build_encoder=lambda scope: BackgroundExtractor(
+            scope=scope,
+            build_cell=lambda n_hidden, scope: tf.contrib.rnn.GRUBlockCellV2(n_hidden, name=scope),
+            layers=[
+                dict(filters=128, kernel_size=4, strides=3),
+                dict(filters=128, kernel_size=4, strides=2),
+                dict(filters=128, kernel_size=4, strides=2),
+            ],
+        ),
+        build_decoder=lambda scope: MLP([50, 50], scope=scope),
+    )
+)
+
+
+def spair_prepare_func():
+    from dps import cfg
+    cfg.anchor_boxes = [cfg.tile_shape]
+    cfg.count_prior_log_odds = (
+        "Exp(start=1000000.0, end={}, decay_rate=0.1, "
+        "decay_steps={}, log=True)".format(
+            cfg.final_count_prior_log_odds, cfg.count_prior_decay_steps)
+    )
+
+
 alg_configs = dict(
     simple_vae=Config(
         build_network=SimpleVideoVAE,
@@ -160,7 +202,6 @@ alg_configs = dict(
         train_kl=True,
         kl_weight=1.0,
 
-        noisy=True,
         build_encoder=lambda scope: MLP([128, 128, 128], scope=scope),
         build_decoder=lambda scope: MLP([128, 128, 128], scope=scope),
         build_cell=lambda scope: CompositeCell(
@@ -195,7 +236,91 @@ alg_configs = dict(
         render_hook=TBA_RenderHook(),
         # fixed_values=dict(conf=1.),
         discrete_eval=False,
-    )
+    ),
+    sspair=Config(
+        build_network=SequentialSpair,
+        prepare_func=spair_prepare_func,
+
+        stopping_criteria="AP,max",
+        threshold=1.0,
+
+        render_hook=None,
+
+        build_backbone=lambda scope: RecurrentGridConvNet(
+            bidirectional=True,
+            layers=[
+                dict(filters=128, kernel_size=4, strides=3),
+                dict(filters=128, kernel_size=4, strides=2),
+                dict(filters=128, kernel_size=4, strides=2),
+                dict(filters=128, kernel_size=1, strides=1),
+                dict(filters=128, kernel_size=1, strides=1),
+                dict(filters=128, kernel_size=1, strides=1),
+            ],
+            build_cell=lambda n_hidden, scope: CompositeCell(
+                tf.contrib.rnn.GRUBlockCellV2(n_hidden),
+                MLP([n_hidden], scope="GRU"), n_hidden),
+            scope=scope,
+        ),
+        build_feature_fuser=lambda scope: ConvNet(
+            scope=scope, layers=[
+                dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
+                dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
+            ],
+        ),
+        build_obj_feature_extractor=lambda scope: ConvNet(
+            scope=scope, layers=[
+                dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
+                dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
+            ],
+        ),
+
+        build_lateral=lambda scope: MLP([100, 100], scope=scope),
+        build_object_encoder=lambda scope: MLP([256, 128], scope=scope),
+        build_object_decoder=lambda scope: MLP([128, 256], scope=scope),
+
+        n_backbone_features=100,
+        n_passthrough_features=100,
+
+        n_lookback=1,
+
+        use_concrete_kl=False,
+        obj_concrete_temp=1.0,
+        obj_temp=1.0,
+        object_shape=(14, 14),
+        A=50,
+
+        min_hw=0.0,
+        max_hw=1.0,
+
+        min_yx=-0.5,
+        max_yx=1.5,
+
+        yx_prior_mean=0.0,
+        yx_prior_std=1.0,
+
+        attr_prior_mean=0.0,
+        attr_prior_std=1.0,
+        z_prior_mean=0.0,
+        z_prior_std=1.0,
+
+        obj_logit_scale=2.0,
+        alpha_logit_scale=0.1,
+        alpha_logit_bias=5.0,
+
+        training_wheels="Exp(1.0, 0.0, decay_rate=0.0, decay_steps=1000, staircase=True)",
+        count_prior_dist=None,
+        noise_schedule="Exp(0.001, 0.0, 1000, 0.1)",
+
+        # Found through hyper parameter search
+        hw_prior_mean=np.log(0.1/0.9),
+        hw_prior_std=0.5,
+        count_prior_decay_steps=1000,
+        final_count_prior_log_odds=0.0125,
+    ),
+)
+
+alg_configs["indep_sspair"] = alg_configs["sspair"].copy(
+    build_obj_feature_extractor=None,
 )
 
 
