@@ -7,6 +7,7 @@ from dps.utils import Config
 from dps.datasets.base import VisualArithmeticDataset
 from dps.datasets.shapes import RandomShapesDataset
 from dps.utils.tf import MLP, CompositeCell, RecurrentGridConvNet, ConvNet
+from dps.config import DEFAULT_CONFIG
 
 from auto_yolo.models.core import Updater
 
@@ -56,7 +57,7 @@ class MovingShapes(object):
         pass
 
 
-basic_config = Config(
+basic_config = DEFAULT_CONFIG.copy(
     use_gpu=True,
     gpu_allow_growth=True,
     stopping_criteria="loss,min",
@@ -154,11 +155,14 @@ env_configs = dict(
     )
 )
 
-env_configs["moving_background"] = env_configs["easy_shapes"].copy(
+env_configs["small_shapes"] = env_configs["easy_shapes"].copy(
     image_shape=(48, 48),
     tile_shape=(48, 48),
     patch_shape=(14, 14),
     object_shape=(14, 14),
+)
+
+env_configs["moving_background"] = env_configs["small_shapes"].copy(
     min_shapes=2,
     max_shapes=2,
     background_cfg=dict(
@@ -167,12 +171,19 @@ env_configs["moving_background"] = env_configs["easy_shapes"].copy(
             scope=scope,
             build_cell=lambda n_hidden, scope: tf.contrib.rnn.GRUBlockCellV2(n_hidden, name=scope),
             layers=[
-                dict(filters=128, kernel_size=4, strides=3),
-                dict(filters=128, kernel_size=4, strides=2),
-                dict(filters=128, kernel_size=4, strides=2),
+                dict(filters=8, kernel_size=4, strides=3),
+                dict(filters=8, kernel_size=4, strides=2),
+                dict(filters=8, kernel_size=4, strides=2),
             ],
         ),
-        build_decoder=lambda scope: MLP([50, 50], scope=scope),
+        build_decoder=lambda scope: ConvNet(
+            scope=scope,
+            layers=[
+                dict(filters=8, kernel_size=4, strides=2, transpose=True,),
+                dict(filters=8, kernel_size=4, strides=2, transpose=True,),
+                dict(filters=8, kernel_size=4, strides=3, transpose=True,),
+            ],
+        ),
     )
 )
 
