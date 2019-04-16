@@ -13,7 +13,7 @@ from auto_yolo.models.core import Updater
 
 from spair_video.core import SimpleVideoVAE, SimpleVAE_RenderHook, BackgroundExtractor
 from spair_video.tracking_by_animation import TrackingByAnimation, TbaBackbone, TBA_RenderHook
-from spair_video.sspair import SequentialSpair
+from spair_video.sspair import SequentialSpair, SequentialSpair_RenderHook
 
 
 class MovingMNIST(object):
@@ -166,7 +166,8 @@ env_configs["moving_background"] = env_configs["small_shapes"].copy(
     min_shapes=2,
     max_shapes=2,
     background_cfg=dict(
-        mode="learn_and_transform", A=8, yx_prior_std=1.0, bg_scale=0.75,
+        mode="learn_and_transform", A=8,
+        bg_shape=(60, 60),
         build_encoder=lambda scope: BackgroundExtractor(
             scope=scope,
             build_cell=lambda n_hidden, scope: tf.contrib.rnn.GRUBlockCellV2(n_hidden, name=scope),
@@ -250,12 +251,11 @@ alg_configs = dict(
     ),
     sspair=Config(
         build_network=SequentialSpair,
+        render_hook=SequentialSpair_RenderHook(),
         prepare_func=spair_prepare_func,
 
         stopping_criteria="AP,max",
         threshold=1.0,
-
-        render_hook=None,
 
         build_backbone=lambda scope: RecurrentGridConvNet(
             bidirectional=True,
@@ -300,6 +300,9 @@ alg_configs = dict(
         object_shape=(14, 14),
         A=50,
 
+        # TODO: see if this helps / is necessary
+        batch_size=4,
+
         min_hw=0.0,
         max_hw=1.0,
 
@@ -334,6 +337,50 @@ alg_configs["indep_sspair"] = alg_configs["sspair"].copy(
     build_obj_feature_extractor=None,
 )
 
+alg_configs["sspair_test"] = alg_configs["sspair"].copy(
+    render_step=5,
+    eval_step=5,
+    display_step=5,
+    batch_size=4,
+    shuffle_buffer_size=32,
+    n_train=1000,
+    n_val=16,
+    A=16,
+    n_frames=2,
+    n_backbone_features=16,
+    n_passthrough_features=16,
+    build_backbone=lambda scope: RecurrentGridConvNet(
+        bidirectional=True,
+        layers=[
+            dict(filters=16, kernel_size=4, strides=3),
+            dict(filters=16, kernel_size=4, strides=2),
+            dict(filters=16, kernel_size=4, strides=2),
+            dict(filters=16, kernel_size=1, strides=1),
+            dict(filters=16, kernel_size=1, strides=1),
+            dict(filters=16, kernel_size=1, strides=1),
+        ],
+        build_cell=lambda n_hidden, scope: CompositeCell(
+            tf.contrib.rnn.GRUBlockCellV2(n_hidden),
+            MLP([n_hidden], scope="GRU"), n_hidden),
+        scope=scope,
+    ),
+    build_feature_fuser=lambda scope: ConvNet(
+        scope=scope, layers=[
+            dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
+            dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
+        ],
+    ),
+    build_obj_feature_extractor=lambda scope: ConvNet(
+        scope=scope, layers=[
+            dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
+            dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
+        ],
+    ),
+
+    build_lateral=lambda scope: MLP([16, 16], scope=scope),
+    build_object_encoder=lambda scope: MLP([64, 64], scope=scope),
+    build_object_decoder=lambda scope: MLP([64, 64], scope=scope),
+)
 
 for k, v in env_configs.items():
     v['env_name'] = k

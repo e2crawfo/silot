@@ -9,7 +9,7 @@ from dps import cfg
 from dps.utils import Param, animate
 from dps.utils.tf import (
     build_scheduled_value, FIXED_COLLECTION, tf_mean_sum, MLP,
-    RenderHook, tf_shape, ConvNet, RecurrentGridConvNet
+    RenderHook, tf_shape, ConvNet, RecurrentGridConvNet, tf_roll
 )
 
 from auto_yolo.models.core import normal_vae, TensorRecorder, xent_loss
@@ -34,10 +34,12 @@ class VideoNetwork(TensorRecorder):
 
         super(VideoNetwork, self).__init__(scope=scope, **kwargs)
 
-    @staticmethod
-    def std_nonlinearity(std_logit):
+    def std_nonlinearity(self, std_logit):
         # return tf.exp(std)
-        return 2 * tf.nn.sigmoid(tf.clip_by_value(std_logit, -10, 10))
+        std = 2 * tf.nn.sigmoid(tf.clip_by_value(std_logit, -10, 10))
+        if not self.noisy:
+            std = tf.zeros_like(std)
+        return std
 
     @property
     def inp(self):
@@ -134,7 +136,7 @@ class VideoNetwork(TensorRecorder):
 
                 # --- encode ---
 
-                n_transform_latents = 2
+                n_transform_latents = 4
                 n_latents = (2 * cfg.background_cfg.A, 2 * n_transform_latents)
 
                 bg_attr, bg_transform_params = self.background_encoder(self.inp, n_latents, self.is_training)
@@ -143,8 +145,6 @@ class VideoNetwork(TensorRecorder):
 
                 bg_attr_mean, bg_attr_log_std = tf.split(bg_attr, 2, axis=-1)
                 bg_attr_std = self.std_nonlinearity(bg_attr_log_std)
-                if not self.noisy:
-                    bg_attr_std = tf.zeros_like(bg_attr_std)
 
                 bg_attr, bg_attr_kl = normal_vae(bg_attr_mean, bg_attr_std, self.attr_prior_mean, self.attr_prior_std)
 
@@ -156,46 +156,51 @@ class VideoNetwork(TensorRecorder):
 
                 mean, log_std = tf.split(bg_transform_params, 2, axis=2)
                 std = self.std_nonlinearity(log_std)
-                if not self.noisy:
-                    std = tf.zeros_like(std)
 
-                logits, kl = normal_vae(mean, std, 0.0, cfg.background_cfg.yx_prior_std)
+                logits, kl = normal_vae(mean, std, 0.0, 1.0)
 
+                # integrate across timesteps
+                logits = tf.cumsum(logits, axis=1)
                 logits = tf.reshape(logits, (self.batch_size*self.n_frames, n_transform_latents))
-                y, x = tf.split(logits, n_transform_latents, axis=1)
+
+                y, x, h, w = tf.split(logits, n_transform_latents, axis=1)
+                h = (0.9 - 0.5) * tf.nn.sigmoid(h) + 0.5
+                w = (0.9 - 0.5) * tf.nn.sigmoid(w) + 0.5
+                y = (1 - h) * tf.nn.tanh(y)
+                x = (1 - w) * tf.nn.tanh(x)
+
+                # --- decode ---
+
+                background = self.background_decoder(bg_attr, self.image_depth, self.is_training)
+                bg_shape = cfg.background_cfg.bg_shape
+                background = background[:, :bg_shape[0], :bg_shape[1], :]
+                assert background.shape[1:3] == bg_shape
+                background_raw = tf.nn.sigmoid(tf.clip_by_value(background, -10, 10))
+
+                transform_constraints = snt.AffineWarpConstraints.no_shear_2d()
+
+                warper = snt.AffineGridWarper(
+                    bg_shape, (self.image_height, self.image_width), transform_constraints)
+
+                transforms = tf.concat([w, x, h, y], axis=-1)
+                grid_coords = warper(transforms)
+
+                grid_coords = tf.reshape(grid_coords, (self.batch_size, self.n_frames, *tf_shape(grid_coords)[1:]))
+
+                background = tf.contrib.resampler.resampler(background_raw, grid_coords)
 
                 self._tensors.update(
                     bg_attr_mean=bg_attr_mean,
                     bg_attr_std=bg_attr_std,
                     bg_attr_kl=bg_attr_kl,
                     bg_attr=bg_attr,
-                    bg_y=y,
-                    bg_x=x,
+                    bg_y=tf.reshape(y, (self.batch_size, self.n_frames, 1)),
+                    bg_x=tf.reshape(x, (self.batch_size, self.n_frames, 1)),
+                    bg_h=tf.reshape(h, (self.batch_size, self.n_frames, 1)),
+                    bg_w=tf.reshape(w, (self.batch_size, self.n_frames, 1)),
                     bg_transform_kl=kl,
+                    bg_raw=background_raw,
                 )
-
-                # --- decode ---
-
-                bg_scale = cfg.background_cfg.bg_scale
-                bg_shape = (int(self.image_height / bg_scale), int(self.image_width / bg_scale))
-
-                background = self.background_decoder(bg_attr, (*bg_shape, self.image_depth), self.is_training)
-
-                background = background[:, :bg_shape[0], :bg_shape[1], :]
-                background = tf.nn.sigmoid(tf.clip_by_value(background, -10, 10))
-
-                transform_constraints = snt.AffineWarpConstraints([[bg_scale, 0.0, None], [0.0, bg_scale, None]])
-
-                warper = snt.AffineGridWarper(
-                    bg_shape, (self.image_height, self.image_width),
-                    transform_constraints)
-
-                transforms = tf.concat([x, y], axis=-1)
-                grid_coords = warper(transforms)
-
-                grid_coords = tf.reshape(grid_coords, (self.batch_size, self.n_frames, *tf_shape(grid_coords)[1:]))
-
-                background = tf.contrib.resampler.resampler(background, grid_coords)
 
             elif cfg.background_cfg.mode == "data":
                 background = self._tensors["background"]

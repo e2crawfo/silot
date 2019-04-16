@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.colors import to_rgb
 
+from dps import cfg
 from dps.utils import Param
 from dps.utils.tf import build_scheduled_value, RenderHook, tf_mean_sum, tf_shape
 
@@ -160,6 +161,12 @@ class SequentialSpair(VideoNetwork):
                 attr_kl=self.kl_weight * tf_mean_sum(obj * self._tensors["attr_kl"]),
             )
 
+            if cfg.background_cfg.mode == "learn_and_transform":
+                self.losses.update(
+                    bg_attr_kl=self.kl_weight * tf_mean_sum(self._tensors["bg_attr_kl"]),
+                    bg_transform_kl=self.kl_weight * tf_mean_sum(self._tensors["bg_transform_kl"]),
+                )
+
         # --- other evaluation metrics ---
 
         if "n_annotations" in self._tensors:
@@ -173,7 +180,11 @@ class SequentialSpair(VideoNetwork):
 
 
 class SequentialSpair_RenderHook(RenderHook):
-    fetches = "obj raw_obj z inp output objects n_objects normalized_box input_glimpses"
+    N = 4
+    linewidth = 2
+
+    fetches = "obj raw_obj z inp output objects n_objects normalized_box background"
+    # fetches += " input_glimpses"
 
     def __call__(self, updater):
         network = updater.network
@@ -186,13 +197,21 @@ class SequentialSpair_RenderHook(RenderHook):
         if "actions" in network._tensors:
             self.fetches += " actions"
 
-        fetched = self._fetch(updater)
+        if "bg_y" in network._tensors:
+            self.fetches += " bg_y bg_x bg_h bg_w bg_raw"
 
-        try:
-            self._plot_reconstruction(updater, fetched)
-            self._plot_patches(updater, fetched, 4)
-        except Exception:
-            pass
+        fetched = self._fetch(updater)
+        self._plot_reconstruction(updater, fetched)
+
+        # try:
+        #     self._plot_reconstruction(updater, fetched)
+        # except Exception:
+        #     pass
+
+    @staticmethod
+    def normalize_images(images):
+        mx = images.reshape(*images.shape[:-3], -1).max(axis=-1)
+        return images / mx[..., None, None, None]
 
     def _plot_reconstruction(self, updater, fetched):
         inp = fetched['inp']
@@ -200,96 +219,146 @@ class SequentialSpair_RenderHook(RenderHook):
         prediction = fetched.get("prediction", None)
         targets = fetched.get("targets", None)
 
-        _, image_height, image_width, _ = inp.shape
+        B, T, image_height, image_width, _ = inp.shape
 
-        obj = fetched['obj'].reshape(self.N, -1)
+        obj = fetched['obj'].reshape(B, T, -1)
+        background = fetched['background']
 
         box = (
             fetched['normalized_box']
             * [image_height, image_width, image_height, image_width]
         )
-        box = box.reshape(self.N, -1, 4)
+        box = box.reshape(B, T, -1, 4)
 
-        n_annotations = fetched.get("n_annotations", [0] * self.N)
+        n_annotations = fetched.get("n_annotations", np.zeros(B, dtype='i'))
         annotations = fetched.get("annotations", None)
+        # actions = fetched.get("actions", None)
 
-        actions = fetched.get("actions", None)
+        diff = self.normalize_images(np.abs(inp - output).mean(axis=-1, keepdims=True))
+        xent = self.normalize_images(
+            xent_loss(pred=output, label=inp, tf=False).mean(axis=-1, keepdims=True))
 
-        sqrt_N = int(np.ceil(np.sqrt(self.N)))
+        learned_bg = "bg_y" in fetched
+        bg_y = fetched.get("bg_y", None)
+        bg_x = fetched.get("bg_x", None)
+        bg_h = fetched.get("bg_h", None)
+        bg_w = fetched.get("bg_w", None)
+        bg_raw = fetched.get("bg_raw", None)
+
+        print("Plotting for {} data points...".format(B))
+        n_images = 8 if learned_bg else 7
 
         on_colour = np.array(to_rgb("xkcd:azure"))
         off_colour = np.array(to_rgb("xkcd:red"))
+
+        fig_unit_size = 4
+        fig_height = T * fig_unit_size
+        fig_width = n_images * fig_unit_size
+
         cutoff = 0.5
+        lw = self.linewidth
+        gt_color = "xkcd:yellow"
 
-        fig, axes = plt.subplots(2*sqrt_N, 2*sqrt_N, figsize=(20, 20))
-        axes = np.array(axes).reshape(2*sqrt_N, 2*sqrt_N)
-        for n, (pred, gt) in enumerate(zip(output, inp)):
-            i = int(n / sqrt_N)
-            j = int(n % sqrt_N)
+        for b in range(B):
+            fig, axes = plt.subplots(T, n_images, figsize=(fig_width, fig_height))
 
-            ax1 = axes[2*i, 2*j]
-            self.imshow(ax1, gt)
-
-            title = ""
             if prediction is not None:
-                title += "target={}, prediction={}".format(np.argmax(targets[n]), np.argmax(prediction[n]))
-            if actions is not None:
-                title += ", actions={}".format(actions[n, 0])
-            ax1.set_title(title)
-
-            ax2 = axes[2*i, 2*j+1]
-            self.imshow(ax2, pred)
-
-            ax3 = axes[2*i+1, 2*j]
-            self.imshow(ax3, pred)
-
-            ax4 = axes[2*i+1, 2*j+1]
-            self.imshow(ax4, pred)
-
-            # Plot proposed bounding boxes
-            for o, (top, left, height, width) in zip(obj[n], box[n]):
-                colour = o * on_colour + (1-o) * off_colour
-
-                rect = patches.Rectangle(
-                    (left, top), width, height, linewidth=2, edgecolor=colour, facecolor='none')
-                ax4.add_patch(rect)
-
-                if o > cutoff:
-                    rect = patches.Rectangle(
-                        (left, top), width, height, linewidth=2, edgecolor=colour, facecolor='none')
-                    ax3.add_patch(rect)
-
-            # Plot true bounding boxes
-            for k in range(n_annotations[n]):
-                valid, _, top, bottom, left, right = annotations[n][k]
-
-                if not valid:
-                    continue
-
-                height = bottom - top
-                width = right - left
-
-                rect = patches.Rectangle(
-                    (left, top), width, height, linewidth=1, edgecolor="xkcd:yellow", facecolor='none')
-                ax1.add_patch(rect)
-
-                rect = patches.Rectangle(
-                    (left, top), width, height, linewidth=1, edgecolor="xkcd:yellow", facecolor='none')
-                ax3.add_patch(rect)
-
-                rect = patches.Rectangle(
-                    (left, top), width, height, linewidth=1, edgecolor="xkcd:yellow", facecolor='none')
-                ax4.add_patch(rect)
+                fig_title = "target={}, prediction={}".format(np.argmax(targets[b]), np.argmax(prediction[b]))
+                fig.suptitle(fig_title, fontsize=16)
 
             for ax in axes.flatten():
                 ax.set_axis_off()
 
-        if prediction is None:
-            plt.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=0.1, hspace=0.1)
-        else:
-            plt.subplots_adjust(left=0, right=1, top=.9, bottom=0, wspace=0.1, hspace=0.2)
+            for t in range(T):
+                ax_inp = axes[t, 0]
+                self.imshow(ax_inp, inp[b, t])
+                if t == 0:
+                    ax_inp.set_title('input')
 
-        self.savefig("sampled_reconstruction", fig, updater)
+                ax = axes[t, 1]
+                self.imshow(ax, output[b, t])
+                if t == 0:
+                    ax.set_title('reconstruction')
+
+                ax = axes[t, 2]
+                self.imshow(ax, diff[b, t])
+                if t == 0:
+                    ax.set_title('abs error')
+
+                ax = axes[t, 3]
+                self.imshow(ax, xent[b, t])
+                if t == 0:
+                    ax.set_title('xent')
+
+                ax_all_bb = axes[t, 4]
+                self.imshow(ax_all_bb, output[b, t])
+                if t == 0:
+                    ax_all_bb.set_title('all bb')
+
+                ax_proposed_bb = axes[t, 5]
+                self.imshow(ax_proposed_bb, output[b, t])
+                if t == 0:
+                    ax_proposed_bb.set_title('proposed bb')
+
+                ax = axes[t, 6]
+                self.imshow(ax, background[b, t])
+                if t == 0:
+                    ax.set_title('background')
+
+                # Plot proposed bounding boxes
+                for o, (top, left, height, width) in zip(obj[b, t], box[b, t]):
+                    colour = o * on_colour + (1-o) * off_colour
+
+                    rect = patches.Rectangle(
+                        (left, top), width, height, linewidth=lw, edgecolor=colour, facecolor='none')
+                    ax_all_bb.add_patch(rect)
+
+                    if o > cutoff:
+                        rect = patches.Rectangle(
+                            (left, top), width, height, linewidth=lw, edgecolor=colour, facecolor='none')
+                        ax_proposed_bb.add_patch(rect)
+
+                # Plot true bounding boxes
+                for k in range(n_annotations[b]):
+                    valid, _, top, bottom, left, right = annotations[b, t, k]
+
+                    if not valid:
+                        continue
+
+                    height = bottom - top
+                    width = right - left
+
+                    rect = patches.Rectangle(
+                        (left, top), width, height, linewidth=lw, edgecolor=gt_color, facecolor='none')
+                    ax_inp.add_patch(rect)
+
+                    rect = patches.Rectangle(
+                        (left, top), width, height, linewidth=lw, edgecolor=gt_color, facecolor='none')
+                    ax_all_bb.add_patch(rect)
+
+                    rect = patches.Rectangle(
+                        (left, top), width, height, linewidth=lw, edgecolor=gt_color, facecolor='none')
+                    ax_proposed_bb.add_patch(rect)
+
+                if learned_bg:
+                    ax = axes[t, 7]
+                    self.imshow(ax, bg_raw[b])
+                    if t == 0:
+                        ax.set_title('raw_bg: y={}, x={}, h={}, w={}'.format(
+                            bg_y[b, t, 0], bg_x[b, t, 0], bg_h[b, t, 0], bg_w[b, t, 0]))
+
+                    height = bg_h[b, t, 0] * image_height
+                    top = (bg_y[b, t, 0] + 1) / 2 * image_height - height / 2
+
+                    width = bg_w[b, t, 0] * image_width
+                    left = (bg_x[b, t, 0] + 1) / 2 * image_width - width / 2
+
+                    rect = patches.Rectangle(
+                        (left, top), width, height, linewidth=lw, edgecolor="xkcd:green", facecolor='none')
+                    ax.add_patch(rect)
+
+            plt.subplots_adjust(left=0.02, right=.98, top=.98, bottom=0.02, wspace=0.1, hspace=0.1)
+            self.savefig("reconstruction/" + str(b), fig, updater)
 
     def _plot_patches(self, updater, fetched, N):
         # Create a plot showing what each object is generating
