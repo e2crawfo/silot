@@ -69,8 +69,10 @@ basic_config = DEFAULT_CONFIG.copy(
     curriculum=[dict()],
 
     batch_size=32,
-    shuffle_buffer_size=32,
-    patience=10000,
+    shuffle_buffer_size=1000,
+    prefetch_buffer_size_in_batches=100,
+    prefetch_to_device=True,
+    patience=0,
 
     n_train=60000,
     n_val=1e3,
@@ -78,10 +80,10 @@ basic_config = DEFAULT_CONFIG.copy(
     lr_schedule=1e-4,
     optimizer_spec="adam",
     max_grad_norm=10.0,
-    eval_step=100,
-    display_step=100,
-    render_step=100,
-    max_steps=int(3e5),
+    eval_step=1000,
+    display_step=1000,
+    render_step=1000,
+    max_steps=np.inf,
 
     noisy=True,
     train_reconstruction=True,
@@ -163,8 +165,8 @@ env_configs["small_shapes"] = env_configs["easy_shapes"].copy(
 )
 
 env_configs["moving_background"] = env_configs["small_shapes"].copy(
-    min_shapes=2,
-    max_shapes=2,
+    min_shapes=1,
+    max_shapes=5,
     background_cfg=dict(
         mode="learn_and_transform", A=8,
         bg_shape=(60, 60),
@@ -186,6 +188,13 @@ env_configs["moving_background"] = env_configs["small_shapes"].copy(
             ],
         ),
     )
+)
+
+env_configs["hard_shapes"] = env_configs["moving_background"].copy(
+    shapes="circle diamond star x plus",
+    colours="red green blue cyan magenta yellow",
+    min_shapes=1, max_shapes=5, patch_shape=(21, 21), max_overlap=98,
+    patch_size_std=0.4, patch_speed=20, backgrounds="all"
 )
 
 
@@ -214,11 +223,11 @@ alg_configs = dict(
         train_kl=True,
         kl_weight=1.0,
 
-        build_encoder=lambda scope: MLP([128, 128, 128], scope=scope),
-        build_decoder=lambda scope: MLP([128, 128, 128], scope=scope),
+        build_encoder=lambda scope: MLP(n_units=[128, 128, 128], scope=scope),
+        build_decoder=lambda scope: MLP(n_units=[128, 128, 128], scope=scope),
         build_cell=lambda scope: CompositeCell(
             tf.contrib.rnn.GRUBlockCellV2(128),
-            MLP([128], scope="GRU"), 2*128),
+            MLP(n_units=[128], scope="GRU"), 2*128),
         render_hook=SimpleVAE_RenderHook(),
     ),
     tracking_by_animation=Config(
@@ -228,11 +237,11 @@ alg_configs = dict(
 
         build_backbone=TbaBackbone,
         build_cell=lambda scope, n_hidden: tf.contrib.rnn.GRUBlockCellV2(n_hidden),
-        build_key_network=lambda scope: MLP([], scope=scope),
-        build_write_network=lambda scope: MLP([], scope=scope),
-        build_output_network=lambda scope: MLP([377], scope=scope),
+        build_key_network=lambda scope: MLP(n_units=[], scope=scope),
+        build_write_network=lambda scope: MLP(n_units=[], scope=scope),
+        build_output_network=lambda scope: MLP(n_units=[377], scope=scope),
         # another possibility, not clear from the paper:
-        # build_output_network=lambda scope: MLP([80, 377], scope=scope),
+        # build_output_network=lambda scope: MLP(n_units=[80, 377], scope=scope),
 
         lr=5e-4,
 
@@ -269,7 +278,7 @@ alg_configs = dict(
             ],
             build_cell=lambda n_hidden, scope: CompositeCell(
                 tf.contrib.rnn.GRUBlockCellV2(n_hidden),
-                MLP([n_hidden], scope="GRU"), n_hidden),
+                MLP(n_units=[n_hidden], scope="GRU"), n_hidden),
             scope=scope,
         ),
         build_feature_fuser=lambda scope: ConvNet(
@@ -285,9 +294,9 @@ alg_configs = dict(
             ],
         ),
 
-        build_lateral=lambda scope: MLP([100, 100], scope=scope),
-        build_object_encoder=lambda scope: MLP([256, 128], scope=scope),
-        build_object_decoder=lambda scope: MLP([128, 256], scope=scope),
+        build_lateral=lambda scope: MLP(n_units=[100, 100], scope=scope),
+        build_object_encoder=lambda scope: MLP(n_units=[256, 128], scope=scope),
+        build_object_decoder=lambda scope: MLP(n_units=[128, 256], scope=scope),
 
         n_backbone_features=100,
         n_passthrough_features=100,
@@ -318,8 +327,8 @@ alg_configs = dict(
         z_prior_std=1.0,
 
         obj_logit_scale=2.0,
-        alpha_logit_scale=0.1,
-        alpha_logit_bias=5.0,
+        alpha_logit_scale=1.0,
+        alpha_logit_bias=0.0,
 
         training_wheels="Exp(1.0, 0.0, decay_rate=0.0, decay_steps=1000, staircase=True)",
         count_prior_dist=None,
@@ -338,11 +347,6 @@ alg_configs["indep_sspair"] = alg_configs["sspair"].copy(
 )
 
 alg_configs["sspair_test"] = alg_configs["sspair"].copy(
-    render_step=5,
-    eval_step=5,
-    display_step=5,
-    batch_size=4,
-    shuffle_buffer_size=32,
     n_train=1000,
     n_val=16,
     A=16,
@@ -361,7 +365,7 @@ alg_configs["sspair_test"] = alg_configs["sspair"].copy(
         ],
         build_cell=lambda n_hidden, scope: CompositeCell(
             tf.contrib.rnn.GRUBlockCellV2(n_hidden),
-            MLP([n_hidden], scope="GRU"), n_hidden),
+            MLP(n_units=[n_hidden], scope="GRU"), n_hidden),
         scope=scope,
     ),
     build_feature_fuser=lambda scope: ConvNet(
@@ -377,9 +381,9 @@ alg_configs["sspair_test"] = alg_configs["sspair"].copy(
         ],
     ),
 
-    build_lateral=lambda scope: MLP([16, 16], scope=scope),
-    build_object_encoder=lambda scope: MLP([64, 64], scope=scope),
-    build_object_decoder=lambda scope: MLP([64, 64], scope=scope),
+    build_lateral=lambda scope: MLP(n_units=[16, 16], scope=scope),
+    build_object_encoder=lambda scope: MLP(n_units=[64, 64], scope=scope),
+    build_object_decoder=lambda scope: MLP(n_units=[64, 64], scope=scope),
 )
 
 for k, v in env_configs.items():

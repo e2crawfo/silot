@@ -227,7 +227,7 @@ class BackgroundExtractor(RecurrentGridConvNet):
             )
 
         if self.transform_head is None:
-            self.transform_head = MLP([64, 64], scope="transform_head")
+            self.transform_head = MLP(n_units=[64, 64], scope="transform_head")
 
         n_attr_channels, n_transform_values = output_size
         processed, n_grid_cells, grid_cell_size = super()._call(inp, n_attr_channels, is_training)
