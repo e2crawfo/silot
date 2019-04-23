@@ -9,12 +9,37 @@ from dps.utils import Param
 from dps.utils.tf import build_scheduled_value, RenderHook, tf_mean_sum, tf_shape
 
 from auto_yolo.models.core import AP, xent_loss
-from auto_yolo.models.object_layer import ObjectLayer
+from auto_yolo.models.object_layer import GridObjectLayer
 
 from spair_video.core import VideoNetwork
+from spair_video.propagation import ObjectPropagationLayer
 
+"""
+Build a few separate layers, which get used repeatedly:
 
-class SequentialSpair(VideoNetwork):
+    1. Normal ObjectLayer, for extracting objects from scene in the first place.
+
+    2. PropagatedObjectLayer, for predicting future versions of each current object.
+       This layer should be independent of a grid, take place at the list level. Needs
+       to have access to an image, because it takes glimpses.
+
+       Actually, there are two ways we could do this. We could make it independent of the grid,
+       and use the list thing. Or we could make it dependent on the grid: predict one step into
+       the future, and then find a matching between predicted objects and bottom-up objects.
+
+       One problem with this latter scheme is that it's not clear how to formulate this as a variational
+       auto-encoder. Maybe we view it as a way of encoding (T-1) + 1 scenes (the + 1 is the predicted scene).
+
+       Anyway, in the ideal case the PropagatedObjectLayer would be agnostic with respect to whether
+       the objects are in a grid or not. Should be doable.
+
+    3. Differentiable approximation of hungarian algorithm.
+
+    4. Differentiable selection algo to go from grid representation to list representation.
+
+"""
+
+class InterpretableSequentialSpair(VideoNetwork):
     build_backbone = Param()
     build_feature_fuser = Param()
     build_obj_feature_extractor = Param()
@@ -46,22 +71,18 @@ class SequentialSpair(VideoNetwork):
 
     def build_representation(self):
         # --- init modules ---
+
+        self.maybe_build_subnet("backbone")
+        self.maybe_build_subnet("feature_fuser")
+        self.maybe_build_subnet("obj_feature_extractor")
+
         self.B = len(self.anchor_boxes)
 
-        if self.backbone is None:
-            self.backbone = self.build_backbone(scope="backbone")
-            if "backbone" in self.fixed_weights:
-                self.backbone.fix_variables()
-
-        if self.feature_fuser is None:
-            self.feature_fuser = self.build_feature_fuser(scope="feature_fuser")
-            if "feature_fuser" in self.fixed_weights:
-                self.feature_fuser.fix_variables()
-
-        if self.obj_feature_extractor is None and self.build_obj_feature_extractor is not None:
-            self.obj_feature_extractor = self.build_obj_feature_extractor(scope="obj_feature_extractor")
-            if "obj_feature_extractor" in self.fixed_weights:
-                self.obj_feature_extractor.fix_variables()
+        # TODO: for each batch, randomly choose the number of frames to condition on vs predict
+        # Actually, we can probably get away without doing this. The hope was that the prior is learned
+        # just by training the usual objective, rather than explicitly including it in training.
+        # We still need a switch to start using the prior after a few steps, but only during evaluation,
+        # and only for a certain kind of evaluation.
 
         backbone_output, n_grid_cells, grid_cell_size = self.backbone(
             self.inp, self.B*self.n_backbone_features, self.is_training)
@@ -71,15 +92,67 @@ class SequentialSpair(VideoNetwork):
         self.pixels_per_cell = tuple(int(i) for i in grid_cell_size)
         H, W, B = self.H, self.W, self.B
 
-        if self.object_layer is None:
-            self.object_layer = ObjectLayer(self.pixels_per_cell, scope="objects")
+        if self.discovery_layer is None:
+            self.discovery_layer = GridObjectLayer(self.pixels_per_cell, scope="discovery")
+
+        if self.propagation_layer is None:
+            self.propagation_layer = ObjectPropagationLayer(scope="propagation")
 
         self.object_rep_tensors = []
         object_rep_tensors = None
         _tensors = defaultdict(list)
 
+        objects = NullObjectLayer()
+
         for f in range(self.n_frames):
             print("Bulding network for frame {}".format(f))
+
+            # Then I apply the propagation layer to the set of objects from the previous timestep
+
+            if f > 0:
+                # TODO: extract fetures from previous set of objects
+                object_features = []
+
+                prior_propagated_objects = self.propagation_layer(
+                    self.inp[:, f], object_features, objects, self.is_training, is_posterior=False)
+
+                posterior_propagated_objects = self.propagation_layer(
+                    self.inp[:, f], object_features, objects, self.is_training, is_posterior=True)
+
+            else:
+                prior_propagated_objects = objects
+                posterior_propagated_objects = objects
+
+            # TODO: also take into account the global hidden state.
+            # TODO: this should be an attentional thing, take into account proximity of the objects
+            prev_object_features = []
+
+            is_posterior_tf = tf.ones_like(prev_object_features[..., 0:2]) * [1, 0]
+            posterior_features_inp = tf.concat([prev_object_features, backbone_output, is_posterior_tf], axis=-1)
+            posterior_features = self.discovery_feature_extractor(posterior_features_inp, self.n_backbone_features, self.is_training)
+
+            dummy_backbone_output = tf.zeros_like(prev_object_features)
+
+            is_prior_tf = tf.ones_like(is_posterior_tf) * [0, 1]
+            prior_features_inp = tf.concat([prev_object_features, dummy_backbone_output, is_posterior_tf], axis=-1)
+            prior_features = self.discovery_feature_extractor(prior_features, self.n_backbone_features, self.is_training)
+
+            # Then I use the object layer twice, calling once with posterior_features in posterior mode, and once with
+            # prior_features in prior_mode
+
+            # ^^ TODO ^^
+
+            # Next, propagated objects and discovered objects are fused using the fusion scheme, obtaining
+            # a final set of objects for the frame.
+            # I think I only have to do this for either prior or posterior, whichever one is actually active
+
+            # Finally, global hidden state is updated based on the set of objects...and maybe also the image? Yeah,
+            # why not. And it should be a latent variable.
+
+
+
+            # below here is old.
+
             early_frame_features = backbone_output[:, f]
 
             if f > 0 and self.obj_feature_extractor is not None:
