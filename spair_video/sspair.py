@@ -33,11 +33,9 @@ class SequentialSpair(VideoNetwork):
     feature_fuser = None
     obj_feature_extractor = None
 
-    _eval_funcs = None
-
     @property
     def eval_funcs(self):
-        if self._eval_funcs is None:
+        if getattr(self, '_eval_funcs', None) is None:
             if "annotations" in self._tensors:
                 ap_iou_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
                 eval_funcs = {"AP_at_point_{}".format(int(10 * v)): AP(v) for v in ap_iou_values}
@@ -187,7 +185,7 @@ class SequentialSpair_RenderHook(RenderHook):
     gt_color = "xkcd:yellow"
     cutoff = 0.5
 
-    fetches = "obj raw_obj z inp output objects normalized_box background input_glimpses"
+    fetches = "obj raw_obj z inp output appearance normalized_box background glimpse"
 
     def __call__(self, updater):
         network = updater.network
@@ -419,8 +417,8 @@ class SequentialSpair_RenderHook(RenderHook):
         N, T, image_height, image_width, _ = fetched['inp'].shape
         H, W, B = updater.network.H, updater.network.W, updater.network.B
 
-        input_glimpses = fetched['input_glimpses']
-        objects = fetched['objects']
+        glimpse = fetched['glimpse']
+        appearance = fetched['appearance']
         obj = fetched['obj']
         raw_obj = fetched['raw_obj']
         z = fetched['z']
@@ -478,15 +476,15 @@ class SequentialSpair_RenderHook(RenderHook):
                     if t == 0 and w == 0 and b == 0:
                         ax.set_ylabel("h={}".format(h))
 
-                    self.imshow(ax, input_glimpses[idx, t, h, w, b, :, :, :])
+                    self.imshow(ax, glimpse[idx, t, h, w, b, :, :, :])
 
                     ax = axes[h * B + b, 3 * w + 1]
-                    self.imshow(ax, objects[idx, t, h, w, b, :, :, :3])
+                    self.imshow(ax, appearance[idx, t, h, w, b, :, :, :3])
 
                     ax.set_title("obj={:.2f}, raw_obj={:.2f}, z={:.2f}".format(_obj, _raw_obj, _z, b))
 
                     ax = axes[h * B + b, 3 * w + 2]
-                    self.imshow(ax, objects[idx, t, h, w, b, :, :, 3], cmap="gray")
+                    self.imshow(ax, appearance[idx, t, h, w, b, :, :, 3], cmap="gray")
 
                 self._plot_helper(idx, t, other_axes, **fetched)
 

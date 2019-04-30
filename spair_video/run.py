@@ -4,7 +4,7 @@ import tensorflow as tf
 from dps import cfg
 from dps.hyper import run_experiment
 from dps.utils import Config
-from dps.datasets.base import VisualArithmeticDataset
+from dps.datasets.base import VisualArithmeticDataset, Environment
 from dps.datasets.shapes import RandomShapesDataset
 from dps.utils.tf import MLP, CompositeCell, RecurrentGridConvNet, ConvNet
 from dps.config import DEFAULT_CONFIG
@@ -14,9 +14,10 @@ from auto_yolo.models.core import Updater
 from spair_video.core import SimpleVideoVAE, SimpleVAE_RenderHook, BackgroundExtractor
 from spair_video.tracking_by_animation import TrackingByAnimation, TbaBackbone, TBA_RenderHook
 from spair_video.sspair import SequentialSpair, SequentialSpair_RenderHook
+from spair_video.interpretable_sspair import InterpretableSequentialSpair, ISSPAIR_RenderHook
 
 
-class MovingMNIST(object):
+class MovingMNIST(Environment):
     def __init__(self):
         train_seed, val_seed, test_seed = 0, 1, 2
 
@@ -34,11 +35,8 @@ class MovingMNIST(object):
 
         self.datasets = dict(train=train, val=val, test=test)
 
-    def close(self):
-        pass
 
-
-class MovingShapes(object):
+class MovingShapes(Environment):
     def __init__(self):
         train_seed, val_seed, test_seed = 0, 1, 2
 
@@ -52,9 +50,6 @@ class MovingShapes(object):
             n_examples=int(cfg.n_val), shuffle=True, seed=test_seed)
 
         self.datasets = dict(train=train, val=val, test=test)
-
-    def close(self):
-        pass
 
 
 basic_config = DEFAULT_CONFIG.copy(
@@ -167,27 +162,6 @@ env_configs["small_shapes"] = env_configs["easy_shapes"].copy(
 env_configs["moving_background"] = env_configs["small_shapes"].copy(
     min_shapes=1,
     max_shapes=5,
-    background_cfg=dict(
-        mode="learn_and_transform", A=8,
-        bg_shape=(60, 60),
-        build_encoder=lambda scope: BackgroundExtractor(
-            scope=scope,
-            build_cell=lambda n_hidden, scope: tf.contrib.rnn.GRUBlockCellV2(n_hidden, name=scope),
-            layers=[
-                dict(filters=8, kernel_size=4, strides=3),
-                dict(filters=8, kernel_size=4, strides=2),
-                dict(filters=8, kernel_size=4, strides=2),
-            ],
-        ),
-        build_decoder=lambda scope: ConvNet(
-            scope=scope,
-            layers=[
-                dict(filters=8, kernel_size=4, strides=2, transpose=True,),
-                dict(filters=8, kernel_size=4, strides=2, transpose=True,),
-                dict(filters=8, kernel_size=4, strides=3, transpose=True,),
-            ],
-        ),
-    )
 )
 
 env_configs["hard_shapes"] = env_configs["moving_background"].copy(
@@ -326,7 +300,7 @@ alg_configs = dict(
         z_prior_mean=0.0,
         z_prior_std=1.0,
 
-        obj_logit_scale=2.0,
+        color_logit_scale=2.0,
         alpha_logit_scale=1.0,
         alpha_logit_bias=0.0,
 
@@ -339,6 +313,28 @@ alg_configs = dict(
         hw_prior_std=0.5,
         count_prior_decay_steps=1000,
         final_count_prior_log_odds=0.0125,
+
+        background_cfg=dict(
+            mode="learn_and_transform", A=8,
+            bg_shape=(60, 60),
+            build_encoder=lambda scope: BackgroundExtractor(
+                scope=scope,
+                build_cell=lambda n_hidden, scope: tf.contrib.rnn.GRUBlockCellV2(n_hidden, name=scope),
+                layers=[
+                    dict(filters=8, kernel_size=4, strides=3),
+                    dict(filters=8, kernel_size=4, strides=2),
+                    dict(filters=8, kernel_size=4, strides=2),
+                ],
+            ),
+            build_decoder=lambda scope: ConvNet(
+                scope=scope,
+                layers=[
+                    dict(filters=8, kernel_size=4, strides=2, transpose=True,),
+                    dict(filters=8, kernel_size=4, strides=2, transpose=True,),
+                    dict(filters=8, kernel_size=4, strides=3, transpose=True,),
+                ],
+            ),
+        )
     ),
 )
 
@@ -349,19 +345,19 @@ alg_configs["indep_sspair"] = alg_configs["sspair"].copy(
 alg_configs["sspair_test"] = alg_configs["sspair"].copy(
     n_train=1000,
     n_val=16,
-    A=16,
+    A=32,
     n_frames=2,
-    n_backbone_features=16,
-    n_passthrough_features=16,
+    n_backbone_features=32,
+    n_passthrough_features=32,
     build_backbone=lambda scope: RecurrentGridConvNet(
         bidirectional=True,
         layers=[
-            dict(filters=16, kernel_size=4, strides=3),
-            dict(filters=16, kernel_size=4, strides=2),
-            dict(filters=16, kernel_size=4, strides=2),
-            dict(filters=16, kernel_size=1, strides=1),
-            dict(filters=16, kernel_size=1, strides=1),
-            dict(filters=16, kernel_size=1, strides=1),
+            dict(filters=32, kernel_size=4, strides=3),
+            dict(filters=32, kernel_size=4, strides=2),
+            dict(filters=32, kernel_size=4, strides=2),
+            dict(filters=32, kernel_size=1, strides=1),
+            dict(filters=32, kernel_size=1, strides=1),
+            dict(filters=32, kernel_size=1, strides=1),
         ],
         build_cell=lambda n_hidden, scope: CompositeCell(
             tf.contrib.rnn.GRUBlockCellV2(n_hidden),
@@ -381,9 +377,36 @@ alg_configs["sspair_test"] = alg_configs["sspair"].copy(
         ],
     ),
 
-    build_lateral=lambda scope: MLP(n_units=[16, 16], scope=scope),
+    build_lateral=lambda scope: MLP(n_units=[32, 32], scope=scope),
     build_object_encoder=lambda scope: MLP(n_units=[64, 64], scope=scope),
     build_object_decoder=lambda scope: MLP(n_units=[64, 64], scope=scope),
+)
+
+alg_configs["test_isspair"] = alg_configs["sspair_test"].copy(
+    render_hook=ISSPAIR_RenderHook(is_training=True),
+    build_discovery_feature_fuser=lambda scope: ConvNet(
+        scope=scope, layers=[
+            dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
+            dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
+        ],
+    ),
+    prior_start_step=-1,
+    build_network=InterpretableSequentialSpair,
+    build_mlp=lambda scope: MLP(n_units=[32, 32], scope=scope),
+    n_hidden=32,
+    n_propagated_objects=5,
+
+    d_yx_prior_mean=0.0,
+    d_yx_prior_std=1.0,
+    d_hw_prior_mean=0.0,
+    d_hw_prior_std=1.0,
+    d_attr_prior_mean=0.0,
+    d_attr_prior_std=1.0,
+    d_z_prior_mean=0.0,
+    d_z_prior_std=1.0,
+    d_obj_log_odds_prior=.9 / .1,
+
+    selection_temperature=0.3,
 )
 
 for k, v in env_configs.items():

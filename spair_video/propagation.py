@@ -7,7 +7,7 @@ Normal = tfp.distributions.Normal
 
 from dps import cfg
 from dps.utils import Param
-from dps.utils.tf import build_scheduled_value, FIXED_COLLECTION, ScopedFunction, tf_shape
+from dps.utils.tf import build_scheduled_value, FIXED_COLLECTION, ScopedFunction, tf_shape, apply_object_wise
 
 from auto_yolo.tf_ops import render_sprites, resampler_edge
 from auto_yolo.models.core import (
@@ -17,7 +17,12 @@ from auto_yolo.models.object_layer import ObjectLayer
 
 def extract_affine_glimpse(image, object_shape, yt, xt, ys, xs, unit_square=False):
     """
-    unit_square: whether (yt, xt) are in unit square coordinates, and need to be switched.
+    unit_square: whether (yt, xt) are in unit square coordinates (where (0, 0) is image top-left,
+    (1, 1) is image bottom-right) and need to be switched.
+
+    (yt, xt) are give rectnagle top-left. (ys, xs) are rectangle height and width if unit_square=True
+    or 1/2 height and width if unit_square=False. In either case, (ys, xs) can simply be interpreted
+    as the scale and do not need to be adjusted.
 
     """
     _, *image_shape, image_depth = tf_shape(image)
@@ -25,8 +30,17 @@ def extract_affine_glimpse(image, object_shape, yt, xt, ys, xs, unit_square=Fals
     warper = snt.AffineGridWarper(image_shape, object_shape, transform_constraints)
 
     if unit_square:
+        # center instead of top left
+        yt += ys / 2
+        xt += xs / 2
+
+        # change coordinate system
         xt = 2 * xt - 1
         yt = 2 * yt - 1
+    else:
+        # center instead of top left
+        yt += ys
+        xt += xs
 
     leading_shape = tf_shape(yt)[:-1]
 
@@ -44,25 +58,79 @@ def extract_affine_glimpse(image, object_shape, yt, xt, ys, xs, unit_square=Fals
 
 
 class ObjectPropagationLayer(ObjectLayer):
+    n_propagated_objects = Param()
 
-    def __init__(self):
-        pass
+    d_yx_prior_mean = Param()
+    d_yx_prior_std = Param()
+    d_hw_prior_mean = Param()
+    d_hw_prior_std = Param()
+    d_attr_prior_mean = Param()
+    d_attr_prior_std = Param()
+    d_z_prior_mean = Param()
+    d_z_prior_std = Param()
+    d_obj_log_odds_prior = Param()
+
+    def null_object_set(self, batch_size):
+        new_objects = AttrDict(
+            normalized_box=tf.zeros((batch_size, self.n_propagated_objects, 4)),
+            attr=tf.zeros((batch_size, self.n_propagated_objects, self.A)),
+            z=tf.zeros((batch_size, self.n_propagated_objects, 1)),
+            obj=tf.zeros((batch_size, self.n_propagated_objects, 1)),
+        )
+
+        yt, xt, ys, xs = tf.split(new_objects.normalized_box, 4, axis=-1)
+
+        new_objects.update(
+            yt=yt,
+            xt=xt,
+            ys=ys,
+            xs=xs,
+
+            d_yt=yt + 0.0,
+            d_xt=xt + 0.0,
+            d_ys=ys + 0.0,
+            d_xs=xs + 0.0,
+
+            d_box=tf.zeros_like(new_objects.normalized_box),
+
+            d_attr=new_objects.attr + 0.0,
+            d_z=new_objects.z + 0.0,
+        )
+
+        new_objects.all = tf.concat(
+            [new_objects.normalized_box, new_objects.attr, new_objects.z, new_objects.obj], axis=-1)
+
+        return new_objects
 
     def _independent_prior(self):
         return dict(
-            cell_y_logit=Normal(loc=self.yx_prior_mean, scale=self.yx_prior_std),
-            cell_x_logit=Normal(loc=self.yx_prior_mean, scale=self.yx_prior_std),
-            h_logit=Normal(loc=self.hw_prior_mean, scale=self.hw_prior_std),
-            w_logit=Normal(loc=self.hw_prior_mean, scale=self.hw_prior_std),
-            attr=Normal(loc=self.attr_prior_mean, scale=self.attr_prior_std),
-            z_logit=Normal(loc=self.z_prior_mean, scale=self.z_prior_std),
+            d_yt_logit_dist=Normal(loc=self.d_yx_prior_mean, scale=self.d_yx_prior_std),
+            d_xt_logit_dist=Normal(loc=self.d_yx_prior_mean, scale=self.d_yx_prior_std),
+            d_ys_logit_dist=Normal(loc=self.d_hw_prior_mean, scale=self.d_hw_prior_std),
+            d_xs_logit_dist=Normal(loc=self.d_hw_prior_mean, scale=self.d_hw_prior_std),
+            d_attr_dist=Normal(loc=self.d_attr_prior_mean, scale=self.d_attr_prior_std),
+            d_z_logit_dist=Normal(loc=self.d_z_prior_mean, scale=self.d_z_prior_std),
+            d_obj_log_odds=self.d_obj_log_odds_prior,
         )
 
-    def _compute_kl(self, tensors, prior):
-        d_yt_kl = tensors["d_yt_logit_dist"].kl_divergence(prior["d_yt_logit"])
-        d_xt_kl = tensors["d_xt_logit_dist"].kl_divergence(prior["d_xt_logit"])
-        d_ys_kl = tensors["d_ys_logit_dist"].kl_divergence(prior["d_ys_logit"])
-        d_xs_kl = tensors["d_xs_logit_dist"].kl_divergence(prior["d_xs_logit"])
+    def compute_kl(self, tensors, prior=None):
+        if prior is None:
+            prior = self._independent_prior()
+
+        if "d_yt_logit_dist" not in tensors:
+            return dict(
+                d_yt_kl=tf.zeros_like(tensors.d_yt),
+                d_xt_kl=tf.zeros_like(tensors.d_xt),
+                d_ys_kl=tf.zeros_like(tensors.d_ys),
+                d_xs_kl=tf.zeros_like(tensors.d_xs),
+                d_attr_kl=tf.zeros_like(tensors.d_attr),
+                d_z_kl=tf.zeros_like(tensors.d_z),
+            )
+
+        d_yt_kl = tensors["d_yt_logit_dist"].kl_divergence(prior["d_yt_logit_dist"])
+        d_xt_kl = tensors["d_xt_logit_dist"].kl_divergence(prior["d_xt_logit_dist"])
+        d_ys_kl = tensors["d_ys_logit_dist"].kl_divergence(prior["d_ys_logit_dist"])
+        d_xs_kl = tensors["d_xs_logit_dist"].kl_divergence(prior["d_xs_logit_dist"])
 
         if "d_yt" in self.no_gradient:
             d_yt_kl = tf.stop_gradient(d_yt_kl)
@@ -80,26 +148,31 @@ class ObjectPropagationLayer(ObjectLayer):
 
         # --- d_attr ---
 
-        d_attr_kl = tensors["d_attr_dist"].kl_divergence(prior["d_attr"])
+        d_attr_kl = tensors["d_attr_dist"].kl_divergence(prior["d_attr_dist"])
 
-        if "attr" in self.no_gradient:
+        if "d_attr" in self.no_gradient:
             d_attr_kl = tf.stop_gradient(d_attr_kl)
 
         # --- z ---
 
-        d_z_kl = tensors["z_logit_dist"].kl_divergence(prior["z_logit"])
+        d_z_kl = tensors["d_z_logit_dist"].kl_divergence(prior["d_z_logit_dist"])
 
-        if "z" in self.no_gradient:
+        if "d_z" in self.no_gradient:
             d_z_kl = tf.stop_gradient(d_z_kl)
 
-        if "z" in self.fixed_values:
+        if "d_z" in self.fixed_values:
             d_z_kl = tf.zeros_like(d_z_kl)
 
         # --- obj ---
 
-        # TODO: Get object KL if appropriate
+        d_obj_kl = concrete_binary_sample_kl(
+            tensors["d_obj_pre_sigmoid"],
+            tensors["d_obj_log_odds"], self.obj_concrete_temp,
+            prior["d_obj_log_odds"], self.obj_concrete_temp,
+        )
 
-        # obj_kl_tensors = self._compute_obj_kl(tensors)
+        if "d_obj" in self.no_gradient:
+            d_obj_kl = tf.stop_gradient(d_obj_kl)
 
         return dict(
             d_yt_kl=d_yt_kl,
@@ -109,13 +182,21 @@ class ObjectPropagationLayer(ObjectLayer):
             d_box_kl=d_box_kl,
             d_attr_kl=d_attr_kl,
             d_z_kl=d_z_kl,
+            d_obj_kl=d_obj_kl,
         )
 
     def _call(self, inp, features, objects, is_training, is_posterior):
+        print("\n" + "-" * 10 + " PropagationLayer(is_posterior={}) ".format(is_posterior) + "-" * 10)
+
+        # TODO: possibly allow adjacent objects to depend on one another...this is the purpose of
+        # SequentialSpair's "relational" network. Of course, maybe we hope that the input feature processing
+        # is enough...but that doesn't allow taking into account the random values that are sampled.
+        # But in SPAIR, I found that the lateral connections didn't matter so much...
+
         self.maybe_build_subnet("d_box_network", key="d_box", builder=cfg.build_lateral)
         self.maybe_build_subnet("d_attr_network", key="d_attr", builder=cfg.build_lateral)
         self.maybe_build_subnet("d_z_network", key="d_z", builder=cfg.build_lateral)
-        self.maybe_build_subnet("d_obj", key="d_obj", builder=cfg.build_lateral)
+        self.maybe_build_subnet("d_obj_network", key="d_obj", builder=cfg.build_lateral)
         self.maybe_build_subnet("glimpse_prime_network", key="glimpse_prime", builder=cfg.build_lateral)
 
         self.maybe_build_subnet("glimpse_prime_encoder", builder=cfg.build_object_encoder)
@@ -141,12 +222,16 @@ class ObjectPropagationLayer(ObjectLayer):
         else:
             is_posterior_tf = is_posterior_tf * [0, 1]
 
+        base_features = tf.concat([features, is_posterior_tf], axis=-1)
+
         yt, xt, ys, xs = tf.split(objects.normalized_box, 4, axis=-1)
+
+        # Do this regardless of is_posterior, otherwise ScopedFunction gets messed up
+        glimpse_prime_params = apply_object_wise(self.glimpse_prime_network, base_features, 4, self.is_training)
 
         if is_posterior:
             # --- predict parameters for glimpse prime ---
 
-            glimpse_prime_params = self.glimpse_prime_network(features, 4, self.is_training)
             _yt, _xt, _ys, _xs = tf.split(glimpse_prime_params, 4, axis=-1)
 
             # --- obtain final parameters for glimpse prime by modifying current pose ---
@@ -160,20 +245,32 @@ class ObjectPropagationLayer(ObjectLayer):
             # --- extract glimpse prime ---
 
             glimpse_prime = extract_affine_glimpse(inp, self.object_shape, g_yt, g_xt, g_ys, g_xs, unit_square=True)
-
-            # --- encode glimpse ---
-
-            encoded_glimpse_prime = self.glimpse_prime_encoder_network(
-                glimpse_prime, self.n_glimpse_features, self.is_training)
-
         else:
+            g_yt = tf.zeros_like(yt)
+            g_xt = tf.zeros_like(xt)
+            g_ys = tf.zeros_like(ys)
+            g_xs = tf.zeros_like(xs)
             glimpse_prime = tf.zeros((batch_size, *obj_leading_shape, *self.object_shape, self.image_depth))
-            encoded_glimpse_prime = tf.zeros((batch_size, *obj_leading_shape, self.n_glimpse_features))
+
+        new_objects.update(
+            g_yt=g_yt,
+            g_xt=g_xt,
+            g_ys=g_ys,
+            g_xs=g_xs,
+        )
+
+        # --- encode glimpse ---
+
+        encoded_glimpse_prime = apply_object_wise(
+            self.glimpse_prime_encoder, glimpse_prime, self.A, self.is_training, n_trailing_dims=3)
+
+        if not is_posterior:
+            encoded_glimpse_prime = tf.zeros_like(encoded_glimpse_prime)
 
         # --- predict distribution for d_box ---
 
-        d_box_inp = tf.concat([features, encoded_glimpse_prime, is_posterior_tf], axis=-1)
-        d_box_params = self.d_box_network(d_box_inp, 8, self.is_training)
+        d_box_inp = tf.concat([base_features, encoded_glimpse_prime], axis=-1)
+        d_box_params = apply_object_wise(self.d_box_network, d_box_inp, 8, self.is_training)
 
         d_box_mean, d_box_log_std = tf.split(d_box_params, 2, axis=-1)
 
@@ -185,35 +282,35 @@ class ObjectPropagationLayer(ObjectLayer):
         d_yt_mean, d_xt_mean, d_ys_mean, d_xs_mean = tf.split(d_box_mean, 4, axis=-1)
         d_yt_std, d_xt_std, d_ys_std, d_xs_std = tf.split(d_box_std, 4, axis=-1)
 
-        d_yt_dist = Normal(loc=d_yt_mean, scale=d_yt_std)
-        d_yt = d_yt_dist.sample()
+        d_yt_logit_dist = Normal(loc=d_yt_mean, scale=d_yt_std)
+        d_yt_logit = d_yt_logit_dist.sample()
 
-        d_xt_dist = Normal(loc=d_xt_mean, scale=d_xt_std)
-        d_xt = d_xt_dist.sample()
+        d_xt_logit_dist = Normal(loc=d_xt_mean, scale=d_xt_std)
+        d_xt_logit = d_xt_logit_dist.sample()
 
-        d_ys_dist = Normal(loc=d_ys_mean, scale=d_ys_std)
-        d_ys = d_ys_dist.sample()
+        d_ys_logit_dist = Normal(loc=d_ys_mean, scale=d_ys_std)
+        d_ys_logit = d_ys_logit_dist.sample()
 
-        d_xs_dist = Normal(loc=d_xs_mean, scale=d_xs_std)
-        d_xs = d_xs_dist.sample()
+        d_xs_logit_dist = Normal(loc=d_xs_mean, scale=d_xs_std)
+        d_xs_logit = d_xs_logit_dist.sample()
 
         if "d_yt" in self.no_gradient:
-            d_yt = tf.stop_gradient(d_yt)
+            d_yt_logit = tf.stop_gradient(d_yt_logit)
 
         if "d_xt" in self.no_gradient:
-            d_xt = tf.stop_gradient(d_xt)
+            d_xt_logit = tf.stop_gradient(d_xt_logit)
 
         if "d_ys" in self.no_gradient:
-            d_ys = tf.stop_gradient(d_ys)
+            d_ys_logit = tf.stop_gradient(d_ys_logit)
 
         if "d_xs" in self.no_gradient:
-            d_xs = tf.stop_gradient(d_xs)
+            d_xs_logit = tf.stop_gradient(d_xs_logit)
 
-        new_yt = yt + d_yt
-        new_xt = xt + d_xt
+        new_yt = yt + d_yt_logit
+        new_xt = xt + d_xt_logit
 
-        new_ys = ys * (1 + tf.nn.tanh(d_ys))
-        new_xs = xs * (1 + tf.nn.tanh(d_xs))
+        new_ys = ys * (1 + tf.nn.tanh(d_ys_logit))
+        new_xs = xs * (1 + tf.nn.tanh(d_xs_logit))
 
         new_box = tf.concat([new_yt, new_xt, new_ys, new_xs], axis=-1)
 
@@ -223,11 +320,18 @@ class ObjectPropagationLayer(ObjectLayer):
             ys=new_ys,
             xs=new_xs,
             normalized_box=new_box,
-            d_yt=d_yt,
-            d_xt=d_xt,
-            d_ys=d_ys,
-            d_xs=d_xs,
+
+            d_yt_logit=d_yt_logit,
+            d_xt_logit=d_xt_logit,
+            d_ys_logit=d_ys_logit,
+            d_xs_logit=d_xs_logit,
+
             glimpse_prime=glimpse_prime,
+
+            d_yt_logit_dist=d_yt_logit_dist,
+            d_xt_logit_dist=d_xt_logit_dist,
+            d_ys_logit_dist=d_ys_logit_dist,
+            d_xs_logit_dist=d_xs_logit_dist,
         )
 
         # --- attributes ---
@@ -236,16 +340,19 @@ class ObjectPropagationLayer(ObjectLayer):
 
         if is_posterior:
             glimpse = extract_affine_glimpse(inp, self.object_shape, yt, xt, ys, xs, unit_square=True)
-            encoded_glimpse = self.glimpse_encoder_network(
-                glimpse, self.n_glimpse_features, self.is_training)
         else:
             glimpse = tf.zeros((batch_size, *obj_leading_shape, *self.object_shape, self.image_depth))
-            encoded_glimpse = tf.zeros((batch_size, *obj_leading_shape, self.n_glimpse_features))
+
+        encoded_glimpse = apply_object_wise(
+            self.glimpse_encoder, glimpse, self.A, self.is_training, n_trailing_dims=3)
+
+        if not is_posterior:
+            encoded_glimpse = tf.zeros_like(encoded_glimpse)
 
         # --- predict change in attributes ---
 
-        d_attr_inp = tf.concat([features, new_box, encoded_glimpse, is_posterior_tf], axis=-1)
-        d_attr_params = self.d_attr_network(d_attr_inp, 2*self.A, self.is_training)
+        d_attr_inp = tf.concat([base_features, new_box, encoded_glimpse], axis=-1)
+        d_attr_params = apply_object_wise(self.d_attr_network, d_attr_inp, 2*self.A, self.is_training)
 
         d_attr_mean, d_attr_log_std = tf.split(d_attr_params, 2, axis=-1)
         d_attr_std = self.std_nonlinearity(d_attr_log_std)
@@ -257,15 +364,20 @@ class ObjectPropagationLayer(ObjectLayer):
 
         new_attr = objects.attr + d_attr
 
-        if "attr" in self.no_gradient:
+        if "d_attr" in self.no_gradient:
             new_attr = tf.stop_gradient(new_attr)
 
-        new_objects.update(attr=new_attr, d_attr=d_attr, glimpse=glimpse)
+        new_objects.update(
+            attr=new_attr,
+            d_attr=d_attr,
+            d_attr_dist=d_attr_dist,
+            glimpse=glimpse
+        )
 
         # --- z ---
 
-        d_z_inp = tf.concat([features, new_box, new_attr, encoded_glimpse, is_posterior_tf], axis=-1)
-        d_z_params = self.d_z_network(d_z_inp, 2, self.is_training)
+        d_z_inp = tf.concat([base_features, new_box, new_attr, encoded_glimpse], axis=-1)
+        d_z_params = apply_object_wise(self.d_z_network, d_z_inp, 2, self.is_training)
 
         d_z_mean, d_z_log_std = tf.split(d_z_params, 2, axis=-1)
         d_z_std = self.std_nonlinearity(d_z_log_std)
@@ -276,26 +388,26 @@ class ObjectPropagationLayer(ObjectLayer):
         d_z_logit_dist = Normal(loc=d_z_mean, scale=d_z_std)
         d_z_logits = d_z_logit_dist.sample()
 
+        if "d_z" in self.no_gradient:
+            d_z_logits = tf.stop_gradient(d_z_logits)
+
+        if "d_z" in self.fixed_values:
+            d_z_logits = self.fixed_values['d_z'] * tf.ones_like(d_z_logits)
+
         old_z_logits = self.z_nonlinearity_inverse(objects.z)
         new_z_logits = old_z_logits + d_z_logits
         new_z = self.z_nonlinearity(new_z_logits)
 
-        if "z" in self.no_gradient:
-            new_z = tf.stop_gradient(new_z)
-
-        if "z" in self.fixed_values:
-            new_z = self.fixed_values['z'] * tf.ones_like(new_z)
-
         new_objects.update(
-            d_z_mean=d_z_mean,
-            d_z_std=d_z_std,
             z=new_z,
+            d_z_logit=d_z_logits,
+            d_z_logit_dist=d_z_logit_dist,
         )
 
         # --- obj ---
 
-        d_obj_inp = tf.concat([features, new_box, new_attr, new_z, encoded_glimpse, is_posterior_tf], axis=-1)
-        d_obj_logits = self.d_obj_network(d_obj_inp, 1, self.is_training)
+        d_obj_inp = tf.concat([base_features, new_box, new_attr, new_z, encoded_glimpse], axis=-1)
+        d_obj_logits = apply_object_wise(self.d_obj_network, d_obj_inp, 1, self.is_training)
 
         d_obj_logits = self.training_wheels * tf.stop_gradient(d_obj_logits) + (1-self.training_wheels) * d_obj_logits
         d_obj_logits = d_obj_logits / self.obj_temp
@@ -313,13 +425,13 @@ class ObjectPropagationLayer(ObjectLayer):
         else:
             d_obj = tf.round(raw_d_obj)
 
-        new_obj = objects.obj * d_obj
-
-        if "obj" in self.no_gradient:
+        if "d_obj" in self.no_gradient:
             d_obj = tf.stop_gradient(d_obj)
 
-        if "obj" in self.fixed_values:
-            new_obj = self.fixed_values['obj'] * tf.ones_like(new_obj)
+        if "d_obj" in self.fixed_values:
+            d_obj = self.fixed_values['d_obj'] * tf.ones_like(d_obj)
+
+        new_obj = objects.obj * d_obj
 
         new_objects.update(
             obj=new_obj,
@@ -333,6 +445,6 @@ class ObjectPropagationLayer(ObjectLayer):
         # --- final ---
 
         new_objects.all = tf.concat(
-            [new_objects.box, new_objects.attr, new_objects.z, new_objects.obj], axis=-1)
+            [new_objects.normalized_box, new_objects.attr, new_objects.z, new_objects.obj], axis=-1)
 
         return new_objects

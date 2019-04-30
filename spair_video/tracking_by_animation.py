@@ -321,7 +321,7 @@ class TrackingByAnimation(VideoNetwork):
             final_frames = (1 - layer_mask) * final_frames + layer_appearance
 
             layer_masks.append(layer_mask)
-            layer_appearances.append(layer_appearances)
+            layer_appearances.append(layer_appearance)
             partial_frames.append(final_frames)
 
         self._tensors["output"] = final_frames

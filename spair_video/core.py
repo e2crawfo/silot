@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgb
 from tensorflow.python.ops.rnn import dynamic_rnn
 import sonnet as snt
+from orderedattrdict import AttrDict
 
 from dps import cfg
 from dps.utils import Param, animate
@@ -60,7 +61,7 @@ class VideoNetwork(TensorRecorder):
     def _call(self, data, is_training):
         inp = data["image"]
 
-        self._tensors = dict(
+        self._tensors = AttrDict(
             inp=inp,
             is_training=is_training,
             float_is_training=tf.to_float(is_training),
