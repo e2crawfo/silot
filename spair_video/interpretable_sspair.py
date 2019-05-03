@@ -119,6 +119,7 @@ def top_k_select_objects(propagated, discovered, temperature):
 
     _, *disc_other, _ = tf_shape(discovered.obj)
     n_disc_objects = np.product(disc_other)
+    n_disc_obj_dim = len(disc_other)
 
     propagated_presence = tf.reshape(propagated.obj, (batch_size, n_prop_objects))
     discovered_presence = tf.reshape(discovered.obj, (batch_size, n_disc_objects))
@@ -165,25 +166,16 @@ def top_k_select_objects(propagated, discovered, temperature):
 
     selected_objects = AttrDict()
 
-    keys = "obj normalized_box attr z".split()
-    for key in keys:
-        final_dim = tf_shape(discovered[key])[-1]
-        disc_value = tf.reshape(discovered[key], (batch_size, n_disc_objects, final_dim))
+    shared_keys = discovered.keys() & propagated.keys()
+    for key in shared_keys:
+        trailing_dims = tf_shape(discovered[key])[1+n_disc_obj_dim:]
+        disc_value = tf.reshape(discovered[key], (batch_size, n_disc_objects, *trailing_dims))
         values = tf.concat([propagated[key], disc_value], axis=1)
         selected_objects[key] = tf.gather_nd(values, index_array)
 
-    selected_objects.all = tf.concat(
-        [selected_objects.normalized_box, selected_objects.attr, selected_objects.z, selected_objects.obj], axis=-1)
-
-    yt, xt, ys, xs = tf.split(selected_objects.normalized_box, 4, axis=-1)
-
     selected_objects.update(
-        yt=yt,
-        xt=xt,
-        ys=ys,
-        xs=xs,
         pred_n_objects=tf.reduce_sum(selected_objects.obj, axis=(1, 2)),
-        pred_n_objects_hard=tf.reduce_sum(tf.round(selected_objects.obj), axis=(1, 2)),
+        pred_n_objects_hard=tf.reduce_sum(tf.round(selected_objects.render_obj), axis=(1, 2)),
         final_weights=tf.one_hot(top_k_indices, n_prop_objects + n_disc_objects, axis=-1),
     )
 
@@ -616,10 +608,10 @@ class ISSPAIR_RenderHook(RenderHook):
     def build_fetches(self, updater):
         prop_names = (
             "d_obj d_xs_logit d_xt_logit d_ys_logit d_yt_logit d_z_logit xs xt ys yt "
-            "glimpse normalized_box obj raw_d_obj glimpse_prime z appearance"
+            "glimpse normalized_box obj glimpse_prime z appearance"
         ).split()
 
-        disc_names = "obj raw_obj z appearance normalized_box glimpse".split()
+        disc_names = "obj render_obj z appearance normalized_box glimpse".split()
         select_names = "obj z normalized_box final_weights yt xt ys xs".split()
         render_names = "output".split()
 
@@ -832,7 +824,7 @@ class ISSPAIR_RenderHook(RenderHook):
                     self.imshow(ax, fetched.bg_raw[idx])
                     remove_rects(ax)
                     if t == 0:
-                        title = flt('raw_bg', y=bg_y[idx, t, 0], x=bg_x[idx, t, 0], h=bg_h[idx, t, 0], w=bg_w[idx, t, 0])
+                        title = flt('bg_raw', y=bg_y[idx, t, 0], x=bg_x[idx, t, 0], h=bg_h[idx, t, 0], w=bg_w[idx, t, 0])
                         ax.set_title(title)
 
                     height = bg_h[idx, t, 0] * image_height
@@ -855,7 +847,7 @@ class ISSPAIR_RenderHook(RenderHook):
 
                     for h, w, b in product(range(H), range(W), range(B)):
                         obj = _fetched.disc.obj[idx, t, h, w, b, 0]
-                        raw_obj = _fetched.disc.raw_obj[idx, t, h, w, b, 0]
+                        render_obj = _fetched.disc.render_obj[idx, t, h, w, b, 0]
                         z = _fetched.disc.z[idx, t, h, w, b, 0]
 
                         ax = disc_axes[h * B + b, 3 * w]
@@ -880,7 +872,7 @@ class ISSPAIR_RenderHook(RenderHook):
                             (1., 0), 0.2, 1, clip_on=False, transform=ax.transAxes, facecolor=color)
                         ax.add_patch(obj_rect)
 
-                        ax.set_title(flt(obj=obj, raw_obj=raw_obj, z=z, final_weight=fw))
+                        ax.set_title(flt(obj=obj, robj=render_obj, z=z, final_weight=fw))
 
                         ax = disc_axes[h * B + b, 3 * w + 2]
                         self.imshow(ax, _fetched.disc.appearance[idx, t, h, w, b, :, :, 3], cmap="gray")
@@ -893,7 +885,6 @@ class ISSPAIR_RenderHook(RenderHook):
                         obj = _fetched.prop.obj[idx, t, k, 0]
                         z = _fetched.prop.z[idx, t, k, 0]
                         d_obj = _fetched.prop.d_obj[idx, t, k, 0]
-                        raw_d_obj = _fetched.prop.raw_d_obj[idx, t, k, 0]
                         d_xs_logit = _fetched.prop.d_xs_logit[idx, t, k, 0]
                         d_ys_logit = _fetched.prop.d_ys_logit[idx, t, k, 0]
                         d_xt_logit = _fetched.prop.d_xt_logit[idx, t, k, 0]
@@ -915,7 +906,7 @@ class ISSPAIR_RenderHook(RenderHook):
                         ax = prop_axes[3*k+1]
                         self.imshow(ax, _fetched.prop.appearance[idx, t, k, :, :, :3])
                         ax.set_title(flt(
-                            d_obj=d_obj, raw_d_obj=raw_d_obj, obj=obj, z=z, yt=yt, xt=xt, ys=ys, xs=xs,
+                            d_obj=d_obj, obj=obj, z=z, yt=yt, xt=xt, ys=ys, xs=xs,
                             dxsl=d_xs_logit, dysl=d_ys_logit, dxtl=d_xt_logit, dytl=d_yt_logit,
                         ))
 

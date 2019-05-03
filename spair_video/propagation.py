@@ -419,36 +419,28 @@ class ObjectPropagationLayer(ObjectLayer):
         d_obj_logits = apply_object_wise(self.d_obj_network, d_obj_inp, 1, self.is_training)
 
         d_obj_logits = self.training_wheels * tf.stop_gradient(d_obj_logits) + (1-self.training_wheels) * d_obj_logits
-        d_obj_logits = d_obj_logits / self.obj_temp
-
-        d_obj_log_odds = tf.clip_by_value(d_obj_logits, -10., 10.)
-
-        d_obj_pre_sigmoid = concrete_binary_pre_sigmoid_sample(d_obj_log_odds, self.obj_concrete_temp)
-        raw_d_obj = tf.nn.sigmoid(d_obj_pre_sigmoid)
+        d_obj_log_odds = tf.clip_by_value(d_obj_logits / self.obj_temp, -10., 10.)
 
         if self.noisy:
-            d_obj = (
-                self.float_is_training * raw_d_obj
-                + (1 - self.float_is_training) * tf.round(raw_d_obj)
-            )
+            d_obj_pre_sigmoid = concrete_binary_pre_sigmoid_sample(d_obj_log_odds, self.obj_concrete_temp)
         else:
-            d_obj = tf.round(raw_d_obj)
+            d_obj_pre_sigmoid = d_obj_log_odds
 
-        if "d_obj" in self.no_gradient:
-            d_obj = tf.stop_gradient(d_obj)
-
-        if "d_obj" in self.fixed_values:
-            d_obj = self.fixed_values['d_obj'] * tf.ones_like(d_obj)
+        d_obj = tf.nn.sigmoid(d_obj_pre_sigmoid)
 
         new_obj = objects.obj * d_obj
+        new_render_obj = (
+            self.float_is_training * new_obj
+            + (1 - self.float_is_training) * tf.round(new_obj)
+        )
 
         new_objects.update(
-            obj=new_obj,
-            d_obj=d_obj,
-            raw_d_obj=raw_d_obj,
-            d_obj_pre_sigmoid=d_obj_pre_sigmoid,
             d_obj_log_odds=d_obj_log_odds,
             d_obj_prob=tf.nn.sigmoid(d_obj_log_odds),
+            d_obj_pre_sigmoid=d_obj_pre_sigmoid,
+            d_obj=d_obj,
+            obj=new_obj,
+            render_obj=new_render_obj,
         )
 
         # --- final ---

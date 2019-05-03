@@ -185,7 +185,7 @@ class SequentialSpair_RenderHook(RenderHook):
     gt_color = "xkcd:yellow"
     cutoff = 0.5
 
-    fetches = "obj raw_obj z inp output appearance normalized_box background glimpse"
+    fetches = "obj render_obj z inp output appearance normalized_box background glimpse"
 
     def __call__(self, updater):
         network = updater.network
@@ -420,7 +420,7 @@ class SequentialSpair_RenderHook(RenderHook):
         glimpse = fetched['glimpse']
         appearance = fetched['appearance']
         obj = fetched['obj']
-        raw_obj = fetched['raw_obj']
+        render_obj = fetched['render_obj']
         z = fetched['z']
 
         fig_unit_size = 3
@@ -461,7 +461,7 @@ class SequentialSpair_RenderHook(RenderHook):
 
                 for h, w, b in product(range(H), range(W), range(B)):
                     _obj = obj[idx, t, h, w, b, 0]
-                    _raw_obj = raw_obj[idx, t, h, w, b, 0]
+                    _render_obj = render_obj[idx, t, h, w, b, 0]
                     _z = z[idx, t, h, w, b, 0]
 
                     ax = axes[h * B + b, 3 * w]
@@ -481,7 +481,7 @@ class SequentialSpair_RenderHook(RenderHook):
                     ax = axes[h * B + b, 3 * w + 1]
                     self.imshow(ax, appearance[idx, t, h, w, b, :, :, :3])
 
-                    ax.set_title("obj={:.2f}, raw_obj={:.2f}, z={:.2f}".format(_obj, _raw_obj, _z, b))
+                    ax.set_title("obj={:.2f}, render_obj={:.2f}, z={:.2f}".format(_obj, _render_obj, _z, b))
 
                     ax = axes[h * B + b, 3 * w + 2]
                     self.imshow(ax, appearance[idx, t, h, w, b, :, :, 3], cmap="gray")

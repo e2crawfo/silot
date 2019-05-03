@@ -273,8 +273,8 @@ alg_configs = dict(
         build_object_encoder=lambda scope: MLP(n_units=[256, 128], scope=scope),
         build_object_decoder=lambda scope: MLP(n_units=[128, 256], scope=scope),
 
-        n_backbone_features=100,
-        n_passthrough_features=100,
+        n_backbone_features=64,
+        n_passthrough_features=64,
 
         n_lookback=1,
 
@@ -282,7 +282,7 @@ alg_configs = dict(
         obj_concrete_temp=1.0,
         obj_temp=1.0,
         object_shape=(14, 14),
-        A=50,
+        A=64,
 
         # TODO: see if this helps / is necessary
         batch_size=4,
@@ -302,8 +302,14 @@ alg_configs = dict(
         z_prior_std=1.0,
 
         color_logit_scale=2.0,
-        alpha_logit_scale=1.0,
-        alpha_logit_bias=0.0,
+
+        # values we were using previously, resulted in large bounding boxes
+        # alpha_logit_scale=1.0,
+        # alpha_logit_bias=0.0,
+
+        # values used in SPAIR
+        alpha_logit_scale=0.1,
+        alpha_logit_bias=5.0,
 
         training_wheels="Exp(1.0, 0.0, decay_rate=0.0, decay_steps=1000, staircase=True)",
         count_prior_dist=None,
