@@ -23,15 +23,15 @@ class MovingMNIST(Environment):
 
         train = VisualArithmeticDataset(
             n_examples=int(cfg.n_train), shuffle=True,
-            episode_range=cfg.train_episode_range, seed=train_seed)
+            example_range=cfg.train_example_range, seed=train_seed)
 
         val = VisualArithmeticDataset(
             n_examples=int(cfg.n_val), shuffle=True,
-            episode_range=cfg.val_episode_range, seed=val_seed)
+            example_range=cfg.val_example_range, seed=val_seed)
 
         test = VisualArithmeticDataset(
             n_examples=int(cfg.n_val), shuffle=True,
-            episode_range=cfg.test_episode_range, seed=test_seed)
+            example_range=cfg.test_example_range, seed=test_seed)
 
         self.datasets = dict(train=train, val=val, test=test)
 
@@ -117,9 +117,10 @@ env_configs = dict(
         colours="white",
         n_distractors_per_image=0,
 
-        train_episode_range=(0.0, 0.8),
-        val_episode_range=(0.8, 0.9),
-        test_episode_range=(0.9, 1.0),
+        train_example_range=(0.0, 0.8),
+        val_example_range=(0.8, 0.9),
+        test_example_range=(0.9, 1.0),
+        digits=list(range(10)),
         n_frames=5,
 
         backgrounds="",
@@ -349,7 +350,7 @@ alg_configs["indep_sspair"] = alg_configs["sspair"].copy(
     build_obj_feature_extractor=None,
 )
 
-alg_configs["sspair_test"] = alg_configs["sspair"].copy(
+alg_configs["test_sspair"] = alg_configs["sspair"].copy(
     n_train=1000,
     n_val=16,
     A=32,
@@ -370,18 +371,6 @@ alg_configs["sspair_test"] = alg_configs["sspair"].copy(
             tf.contrib.rnn.GRUBlockCellV2(n_hidden),
             MLP(n_units=[n_hidden], scope="GRU"), n_hidden),
         scope=scope,
-    ),
-    build_feature_fuser=lambda scope: ConvNet(
-        scope=scope, layers=[
-            dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
-            dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
-        ],
-    ),
-    build_obj_feature_extractor=lambda scope: ConvNet(
-        scope=scope, layers=[
-            dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
-            dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
-        ],
     ),
 
     build_lateral=lambda scope: MLP(n_units=[32, 32], scope=scope),
@@ -428,32 +417,34 @@ alg_configs["load_isspair"] = alg_configs["isspair"].copy(
     do_train=False,
 )
 
-alg_configs["test_isspair"] = alg_configs["sspair_test"].copy(
-    render_hook=ISSPAIR_RenderHook(is_training=True),
-    build_discovery_feature_fuser=lambda scope: ConvNet(
-        scope=scope, layers=[
-            dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
-            dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
-        ],
-    ),
-    prior_start_step=-1,
-    build_network=InterpretableSequentialSpair,
+alg_configs["test_isspair"] = alg_configs["isspair"].copy(
     build_mlp=lambda scope: MLP(n_units=[32, 32], scope=scope),
+    build_lateral=lambda scope: MLP(n_units=[32, 32], scope=scope),
+    build_object_encoder=lambda scope: MLP(n_units=[64, 64], scope=scope),
+    build_object_decoder=lambda scope: MLP(n_units=[64, 64], scope=scope),
+    build_backbone=lambda scope: RecurrentGridConvNet(
+        bidirectional=True,
+        layers=[
+            dict(filters=32, kernel_size=4, strides=3),
+            dict(filters=32, kernel_size=4, strides=2),
+            dict(filters=32, kernel_size=4, strides=2),
+            dict(filters=32, kernel_size=1, strides=1),
+            dict(filters=32, kernel_size=1, strides=1),
+            dict(filters=32, kernel_size=1, strides=1),
+        ],
+        build_cell=lambda n_hidden, scope: CompositeCell(
+            tf.contrib.rnn.GRUBlockCellV2(n_hidden),
+            MLP(n_units=[n_hidden], scope="GRU"), n_hidden),
+        scope=scope,
+    ),
+    n_train=1000,
+    n_val=16,
+    A=32,
+    n_frames=2,
+    n_backbone_features=32,
+    n_passthrough_features=32,
     n_hidden=32,
     n_propagated_objects=5,
-
-    d_yx_prior_mean=0.0,
-    d_yx_prior_std=1.0,
-    d_hw_prior_mean=0.0,
-    d_hw_prior_std=1.0,
-    d_attr_prior_mean=0.0,
-    d_attr_prior_std=1.0,
-    d_z_prior_mean=0.0,
-    d_z_prior_std=1.0,
-    d_obj_log_odds_prior=.9 / .1,
-
-    selection_temperature=0.3,
-    select_top_k=True,
 )
 
 for k, v in env_configs.items():
