@@ -6,7 +6,6 @@ from orderedattrdict import AttrDict
 import pprint
 
 import matplotlib.pyplot as plt
-plt.rcParams['animation.ffmpeg_path'] = '/usr/bin/ffmpeg'
 from matplotlib import animation
 import matplotlib.gridspec as gridspec
 import matplotlib.patches as patches
