@@ -24,7 +24,7 @@ from spair_video.core import VideoNetwork
 from spair_video.propagation import ObjectPropagationLayer
 
 
-def select_objects(propagated, discovered, temperature):
+def probabilistic_select_objects(propagated, discovered, temperature):
     """ Assumes first dimension is batch size, and all other dimensions except the last iterate over objects. """
     batch_size, *prop_other, final = tf_shape(propagated.obj)
     assert final == 1
@@ -41,7 +41,7 @@ def select_objects(propagated, discovered, temperature):
     used_weights = []
     final_weights = []
 
-    for i in range(propagated_presence.shape[1]):
+    for i in range(n_prop_objects):
         remaining_presence.append(discovered_presence)
 
         probs = discovered_presence / (tf.reduce_sum(discovered_presence, axis=-1, keepdims=True) + 1e-6)
@@ -91,6 +91,105 @@ def select_objects(propagated, discovered, temperature):
     return selected_objects, remaining_presence, weights, used_weights, final_weights
 
 
+def top_k_select_objects(propagated, discovered, temperature):
+    """ Select top k from all objects, but any values that come from the propagated objects should go back in the same place...
+        Actually...I can probably most emulate this by making the temperature of the concretes super high....
+        But we can't set the temperature to be high on the object-ness, only on the selection. Which means we are still going
+        to get interpolation between selected objects and the propagated object that previously occupied that slot.
+
+        In original SPAIR, we only had to turn objects on or off, never interpolate between objects, and that worked well.
+        How do we do the same thing here? The answer is clearly to keep all objects from each time step (so the number
+        of propagated objects at any time is H*W*f, where f is the frame index.
+
+        That would clearly be expensive, and the majority of objects will not be on anyway. So let's save ourselves some
+        computation and only choose objects that want to be on? Especially because we only allow objects to
+        become less visible than they were previously during propagation.
+        Also...we can choose n_prop_objects to be larger than H*W, thereby interpolating between the full scheme and
+        the more computationally tractable scheme.
+
+        Because of the cutoff, there will only be competition for selection within objects that have already been selected.
+        However...one nice feature: for the first timestep, there is room for all bottom-up objects, because all the propagated
+        objects will have obj=0.0. So this might not be such a big deal. But will it become difficult have objects
+        come into existence on subsequent steps? Possibly...
+
+    """
+    batch_size, *prop_other, final = tf_shape(propagated.obj)
+    assert final == 1
+    n_prop_objects = np.product(prop_other)
+
+    _, *disc_other, _ = tf_shape(discovered.obj)
+    n_disc_objects = np.product(disc_other)
+
+    propagated_presence = tf.reshape(propagated.obj, (batch_size, n_prop_objects))
+    discovered_presence = tf.reshape(discovered.obj, (batch_size, n_disc_objects))
+
+    all_presence = tf.concat([propagated_presence, discovered_presence], axis=1)
+
+    _, top_k_indices = tf.nn.top_k(all_presence, k=n_prop_objects, sorted=False)
+    top_k_indices = tf.sort(top_k_indices, axis=1)
+    top_k_indices = tf.reshape(top_k_indices, (batch_size, n_prop_objects))
+
+    from_prop = tf.cast(top_k_indices < n_prop_objects, tf.int32)
+    n_from_prop = tf.reduce_sum(from_prop, axis=1)
+
+    scatter_indices = tf.concat([
+        tf.tile(tf.range(batch_size)[:, None, None], (1, n_prop_objects, 1)),
+        top_k_indices[:, :, None]],
+        axis=2
+    )
+
+    in_top_k = tf.scatter_nd(
+        scatter_indices, tf.ones((batch_size, n_prop_objects), dtype=tf.int32),
+        (batch_size, n_prop_objects+n_disc_objects))
+
+    from_disc_idx = n_from_prop
+
+    new_indices = []
+    for i in range(n_prop_objects):
+        # gather indices to use if i is not present in top_k
+        gather_indices = tf.concat([tf.range(batch_size)[:, None], from_disc_idx[:, None]], axis=1)
+        other = tf.gather_nd(top_k_indices, gather_indices)
+
+        i_present = in_top_k[:, i]
+
+        indices = tf.where(tf.cast(i_present, tf.bool), i * tf.ones_like(other), other)
+
+        from_disc_idx += 1 - i_present
+
+        new_indices.append(indices)
+
+    top_k_indices = tf.stack(new_indices, axis=1)
+
+    batch_indices = tf.tile(tf.range(batch_size)[:, None, None], (1, n_prop_objects, 1))
+    index_array = tf.concat([batch_indices, top_k_indices[:, :, None]], axis=2)
+
+    selected_objects = AttrDict()
+
+    keys = "obj normalized_box attr z".split()
+    for key in keys:
+        final_dim = tf_shape(discovered[key])[-1]
+        disc_value = tf.reshape(discovered[key], (batch_size, n_disc_objects, final_dim))
+        values = tf.concat([propagated[key], disc_value], axis=1)
+        selected_objects[key] = tf.gather_nd(values, index_array)
+
+    selected_objects.all = tf.concat(
+        [selected_objects.normalized_box, selected_objects.attr, selected_objects.z, selected_objects.obj], axis=-1)
+
+    yt, xt, ys, xs = tf.split(selected_objects.normalized_box, 4, axis=-1)
+
+    selected_objects.update(
+        yt=yt,
+        xt=xt,
+        ys=ys,
+        xs=xs,
+        pred_n_objects=tf.reduce_sum(selected_objects.obj, axis=(1, 2)),
+        pred_n_objects_hard=tf.reduce_sum(tf.round(selected_objects.obj), axis=(1, 2)),
+        final_weights=tf.one_hot(top_k_indices, n_prop_objects + n_disc_objects, axis=-1),
+    )
+
+    return (selected_objects,)
+
+
 class InterpretableSequentialSpair(VideoNetwork):
     build_backbone = Param()
     build_discovery_feature_fuser = Param()
@@ -107,6 +206,7 @@ class InterpretableSequentialSpair(VideoNetwork):
     prior_start_step = Param()
     n_hidden = Param()
     selection_temperature = Param()
+    select_top_k = Param()
 
     discovery_layer = None
     discovery_feature_extractor = None
@@ -187,6 +287,11 @@ class InterpretableSequentialSpair(VideoNetwork):
         tensors = []
         objects = self.propagation_layer.null_object_set(self.batch_size)
 
+        if self.select_top_k:
+            select_objects = top_k_select_objects
+        else:
+            select_objects = probabilistic_select_objects
+
         for f in range(self.n_frames):
             print("\n" + "-" * 20 + "Building network for frame {}".format(f) + "-" * 20)
 
@@ -205,16 +310,6 @@ class InterpretableSequentialSpair(VideoNetwork):
 
             prior_propagated_objects = self.propagation_layer(*propagation_args, is_posterior=False)
             posterior_propagated_objects = self.propagation_layer(*propagation_args, is_posterior=True)
-
-            """
-            To the extent that a propagated object is not on, it should be mixed with a null object.
-            That should happen inside the propagation layer...
-            That's dicey though...it kind of screws with everything else.
-            Basically just end up multiplying everything by obj...
-
-            This comes from the fact that we're interpolating objects...which is maybe not the smartest thing to do.
-
-            """
 
             # else:
             #     prior_propagated_objects = objects
@@ -325,7 +420,7 @@ class InterpretableSequentialSpair(VideoNetwork):
             # For obj_kl:
             # The only one that is special is disc_indep_kl, which should make use of the formulation that we used
             # independent SPAIR. The others just do normal correspondence between independent distributions, using
-            # the KL divergence for the concrete distribution.
+            # the standard formula for KL divergence between concrete distributions.
 
             prop_indep_prior_kl = self.propagation_layer.compute_kl(posterior_propagated_objects)
             prop_learned_prior_kl = self.propagation_layer.compute_kl(
@@ -447,14 +542,14 @@ class InterpretableSequentialSpair(VideoNetwork):
             prop_indep_prior_kl = self._tensors["prop_indep_prior_kl"]
 
             self.losses.update(
-                **{"prop_indep_prior_{}".format(k): self.kl_weight * tf_mean_sum(prop_obj * kl)
+                **{"prop_indep_prior_{}".format(k): 0.5 * self.kl_weight * tf_mean_sum(prop_obj * kl)
                    for k, kl in prop_indep_prior_kl.items()
                    if "obj" not in k}
             )
 
             prop_learned_prior_kl = self._tensors["prop_learned_prior_kl"]
             self.losses.update(
-                **{"prop_learned_prior_{}".format(k): self.kl_weight * tf_mean_sum(prop_obj * kl)
+                **{"prop_learned_prior_{}".format(k): 0.5 * self.kl_weight * tf_mean_sum(prop_obj * kl)
                    for k, kl in prop_learned_prior_kl.items()
                    if "obj" not in k}
             )
@@ -466,14 +561,14 @@ class InterpretableSequentialSpair(VideoNetwork):
             disc_indep_prior_kl = self._tensors["disc_indep_prior_kl"]
 
             self.losses.update(
-                **{"disc_indep_prior_{}".format(k): self.kl_weight * tf_mean_sum(disc_obj * kl)
+                **{"disc_indep_prior_{}".format(k): 0.5 * self.kl_weight * tf_mean_sum(disc_obj * kl)
                    for k, kl in disc_indep_prior_kl.items()
                    if "obj" not in k}
             )
 
             disc_learned_prior_kl = self._tensors["disc_learned_prior_kl"]
             self.losses.update(
-                **{"disc_learned_prior_{}".format(k): self.kl_weight * tf_mean_sum(disc_obj * kl)
+                **{"disc_learned_prior_{}".format(k): 0.5 * self.kl_weight * tf_mean_sum(disc_obj * kl)
                    for k, kl in disc_learned_prior_kl.items()
                    if "obj" not in k}
             )
@@ -481,13 +576,14 @@ class InterpretableSequentialSpair(VideoNetwork):
             # --- obj for both prop and disc ---
 
             self.losses.update(
-                disc_learned_prior_obj_kl=self.kl_weight * tf_mean_sum(disc_learned_prior_kl["obj_kl"]),
-                disc_indep_prior_obj_kl=self.kl_weight * tf_mean_sum(disc_indep_prior_kl["obj_kl"]),
-                prop_learned_prior_obj_kl=self.kl_weight * tf_mean_sum(prop_learned_prior_kl["d_obj_kl"]),
-                prop_indep_prior_obj_kl=self.kl_weight * tf_mean_sum(prop_indep_prior_kl["d_obj_kl"]),
+                disc_learned_prior_obj_kl=0.5 * self.kl_weight * tf_mean_sum(disc_learned_prior_kl["obj_kl"]),
+                disc_indep_prior_obj_kl=0.5 * self.kl_weight * tf_mean_sum(disc_indep_prior_kl["obj_kl"]),
+                prop_learned_prior_obj_kl=0.5 * self.kl_weight * tf_mean_sum(prop_learned_prior_kl["d_obj_kl"]),
+                prop_indep_prior_obj_kl=0.5 * self.kl_weight * tf_mean_sum(prop_indep_prior_kl["d_obj_kl"]),
             )
 
             if cfg.background_cfg.mode == "learn_and_transform":
+                # Don't multiply by 0.5 here, because there is only 1 prior
                 self.losses.update(
                     bg_attr_kl=self.kl_weight * tf_mean_sum(self._tensors["bg_attr_kl"]),
                     bg_transform_kl=self.kl_weight * tf_mean_sum(self._tensors["bg_transform_kl"]),
@@ -513,14 +609,13 @@ class ISSPAIR_RenderHook(RenderHook):
     on_color = np.array(to_rgb("xkcd:azure"))
     off_color = np.array(to_rgb("xkcd:red"))
     selected_color = np.array(to_rgb("xkcd:neon green"))
-    unselected_color = np.array(to_rgb("xkcd:white"))
+    unselected_color = np.array(to_rgb("xkcd:fire engine red"))
     gt_color = "xkcd:yellow"
     cutoff = 0.5
 
-    @property
-    def fetches(self):
+    def build_fetches(self, updater):
         prop_names = (
-            "d_obj d_xs_logit d_xt_logit d_ys_logit d_yt_logit d_z_logit g_xs g_xt g_ys g_yt "
+            "d_obj d_xs_logit d_xt_logit d_ys_logit d_yt_logit d_z_logit xs xt ys yt "
             "glimpse normalized_box obj raw_d_obj glimpse_prime z appearance"
         ).split()
 
@@ -543,14 +638,8 @@ class ISSPAIR_RenderHook(RenderHook):
             ),
         )
 
-        _fetches = ' '.join(list(_fetches.keys()))
-        _fetches += " inp background"
-
-        return _fetches
-
-    def __call__(self, updater):
-
-        fetches = self.fetches
+        fetches = ' '.join(list(_fetches.keys()))
+        fetches += " inp background"
 
         network = updater.network
         if "n_annotations" in network._tensors:
@@ -565,7 +654,10 @@ class ISSPAIR_RenderHook(RenderHook):
         if "bg_y" in network._tensors:
             fetches += " bg_y bg_x bg_h bg_w bg_raw"
 
-        fetched = self._fetch(updater, fetches)
+        return fetches
+
+    def __call__(self, updater):
+        fetched = self._fetch(updater)
         fetched = Config(fetched)
 
         self._prepare_fetched(fetched)
@@ -778,7 +870,11 @@ class ISSPAIR_RenderHook(RenderHook):
                         ax = disc_axes[h * B + b, 3 * w + 1]
                         self.imshow(ax, _fetched.disc.appearance[idx, t, h, w, b, :, :, :3])
 
-                        fw = final_weights[obj_idx]
+                        if updater.network.select_top_k:
+                            fw = final_weights[n_prop_objects + obj_idx]
+                        else:
+                            fw = final_weights[obj_idx]
+
                         color = fw * self.selected_color + (1-fw) * self.unselected_color
                         obj_rect = patches.Rectangle(
                             (1., 0), 0.2, 1, clip_on=False, transform=ax.transAxes, facecolor=color)
@@ -802,6 +898,10 @@ class ISSPAIR_RenderHook(RenderHook):
                         d_ys_logit = _fetched.prop.d_ys_logit[idx, t, k, 0]
                         d_xt_logit = _fetched.prop.d_xt_logit[idx, t, k, 0]
                         d_yt_logit = _fetched.prop.d_yt_logit[idx, t, k, 0]
+                        xs = _fetched.prop.xs[idx, t, k, 0]
+                        ys = _fetched.prop.ys[idx, t, k, 0]
+                        xt = _fetched.prop.xt[idx, t, k, 0]
+                        yt = _fetched.prop.yt[idx, t, k, 0]
 
                         ax = prop_axes[3*k]
 
@@ -815,16 +915,40 @@ class ISSPAIR_RenderHook(RenderHook):
                         ax = prop_axes[3*k+1]
                         self.imshow(ax, _fetched.prop.appearance[idx, t, k, :, :, :3])
                         ax.set_title(flt(
-                            d_obj=d_obj, raw_d_obj=raw_d_obj, obj=obj, z=z,
+                            d_obj=d_obj, raw_d_obj=raw_d_obj, obj=obj, z=z, yt=yt, xt=xt, ys=ys, xs=xs,
                             dxsl=d_xs_logit, dysl=d_ys_logit, dxtl=d_xt_logit, dytl=d_yt_logit,
                         ))
+
+                        if updater.network.select_top_k:
+                            fw = final_weights[k]
+                            color = fw * self.selected_color + (1-fw) * self.unselected_color
+                            obj_rect = patches.Rectangle(
+                                (1., 0), 0.2, 1, clip_on=False, transform=ax.transAxes, facecolor=color)
+                            ax.add_patch(obj_rect)
 
                         ax = prop_axes[3*k+2]
                         self.imshow(ax, _fetched.prop.appearance[idx, t, k, :, :, 3], cmap="gray")
 
                     # --- select object ---
-                    _final_weight_images = _fetched.select.final_weights[idx, t].reshape(n_prop_objects, updater.network.H, updater.network.W, 1)
-                    _final_weight_images = _final_weight_images * self.selected_color + (1-_final_weight_images) * self.unselected_color
+
+                    prop_weight_images = None
+
+                    if updater.network.select_top_k:
+                        prop_weight_images = _fetched.select.final_weights[idx, t, :, :n_prop_objects]
+                        _H = int(np.ceil(n_prop_objects / W))
+                        padding = W * _H - n_prop_objects
+                        prop_weight_images = np.pad(prop_weight_images, ((0, 0), (0, padding)), 'constant')
+                        prop_weight_images = prop_weight_images.reshape(n_prop_objects, _H, W, 1)
+                        prop_weight_images = (
+                            prop_weight_images * self.selected_color + (1-prop_weight_images) * self.unselected_color)
+
+                        final_weight_images = _fetched.select.final_weights[idx, t, :, n_prop_objects:]
+                    else:
+                        final_weight_images = _fetched.select.final_weights[idx, t]
+
+                    final_weight_images = final_weight_images.reshape(n_prop_objects, H, W, 1)
+                    final_weight_images = (
+                        final_weight_images * self.selected_color + (1-final_weight_images) * self.unselected_color)
 
                     for k in range(n_prop_objects):
                         obj = _fetched.select.obj[idx, t, k, 0]
@@ -835,15 +959,19 @@ class ISSPAIR_RenderHook(RenderHook):
                         yt = _fetched.select.yt[idx, t, k, 0]
 
                         ax = select_axes[3*k]
-                        self.imshow(ax, _final_weight_images[k])
+
+                        if updater.network.select_top_k:
+                            self.imshow(ax, prop_weight_images[k])
+
+                        ax = select_axes[3*k+1]
 
                         color = obj * self.on_color + (1-obj) * self.off_color
                         obj_rect = patches.Rectangle(
-                            (1., 0), 0.2, 1, clip_on=False, transform=ax.transAxes, facecolor=color)
+                            (-0.2, 0), 0.2, 1, clip_on=False, transform=ax.transAxes, facecolor=color)
                         ax.add_patch(obj_rect)
 
-                        ax = select_axes[3*k+1]
                         ax.set_title(flt(obj=obj, z=z, xs=xs, ys=ys, xt=xt, yt=yt))
+                        self.imshow(ax, final_weight_images[k])
 
                     # --- other ---
 

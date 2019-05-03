@@ -38,7 +38,7 @@ if __name__ == "__main__":
     B = 3
     N = 16
     M = 16
-    temperature = 0.01
+    temperature = 0.001
     propagated_presence = tfp.distributions.RelaxedBernoulli(probs=0.4 * np.ones((B, N)), temperature=0.1).sample()
     discovered_presence = tfp.distributions.RelaxedBernoulli(probs=0.4 * np.ones((B, M)), temperature=0.1).sample()
     remaining_presence, weights, used_weights, final_weights = select(propagated_presence, discovered_presence, temperature=temperature)

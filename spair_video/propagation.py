@@ -2,6 +2,7 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 import sonnet as snt
 from orderedattrdict import AttrDict
+import numpy as np
 
 Normal = tfp.distributions.Normal
 
@@ -20,7 +21,7 @@ def extract_affine_glimpse(image, object_shape, yt, xt, ys, xs, unit_square=Fals
     unit_square: whether (yt, xt) are in unit square coordinates (where (0, 0) is image top-left,
     (1, 1) is image bottom-right) and need to be switched.
 
-    (yt, xt) are give rectnagle top-left. (ys, xs) are rectangle height and width if unit_square=True
+    (yt, xt) are rectangle top-left. (ys, xs) are rectangle height and width if unit_square=True
     or 1/2 height and width if unit_square=False. In either case, (ys, xs) can simply be interpreted
     as the scale and do not need to be adjusted.
 
@@ -59,6 +60,7 @@ def extract_affine_glimpse(image, object_shape, yt, xt, ys, xs, unit_square=Fals
 
 class ObjectPropagationLayer(ObjectLayer):
     n_propagated_objects = Param()
+    use_glimpse = Param()
 
     d_yx_prior_mean = Param()
     d_yx_prior_std = Param()
@@ -197,10 +199,11 @@ class ObjectPropagationLayer(ObjectLayer):
         self.maybe_build_subnet("d_attr_network", key="d_attr", builder=cfg.build_lateral)
         self.maybe_build_subnet("d_z_network", key="d_z", builder=cfg.build_lateral)
         self.maybe_build_subnet("d_obj_network", key="d_obj", builder=cfg.build_lateral)
-        self.maybe_build_subnet("glimpse_prime_network", key="glimpse_prime", builder=cfg.build_lateral)
 
-        self.maybe_build_subnet("glimpse_prime_encoder", builder=cfg.build_object_encoder)
-        self.maybe_build_subnet("glimpse_encoder", builder=cfg.build_object_encoder)
+        if self.use_glimpse:
+            self.maybe_build_subnet("glimpse_prime_network", key="glimpse_prime", builder=cfg.build_lateral)
+            self.maybe_build_subnet("glimpse_prime_encoder", builder=cfg.build_object_encoder)
+            self.maybe_build_subnet("glimpse_encoder", builder=cfg.build_object_encoder)
 
         if not self.initialized:
             # Note this limits the re-usability of this module to images
@@ -213,6 +216,7 @@ class ObjectPropagationLayer(ObjectLayer):
             self.float_is_training = tf.to_float(is_training)
 
         batch_size, *obj_leading_shape, _ = tf_shape(features)
+        n_objects = int(np.prod(obj_leading_shape))
 
         new_objects = AttrDict()
 
@@ -224,23 +228,26 @@ class ObjectPropagationLayer(ObjectLayer):
 
         base_features = tf.concat([features, is_posterior_tf], axis=-1)
 
+        if self.use_glimpse:
+            # Do this regardless of is_posterior, otherwise ScopedFunction gets messed up
+            glimpse_prime_params = apply_object_wise(self.glimpse_prime_network, base_features, 4, self.is_training)
+        else:
+            glimpse_prime_params = tf.zeros_like(base_features[..., :4])
+
         yt, xt, ys, xs = tf.split(objects.normalized_box, 4, axis=-1)
 
-        # Do this regardless of is_posterior, otherwise ScopedFunction gets messed up
-        glimpse_prime_params = apply_object_wise(self.glimpse_prime_network, base_features, 4, self.is_training)
-
-        if is_posterior:
+        if is_posterior and self.use_glimpse:
             # --- predict parameters for glimpse prime ---
 
             _yt, _xt, _ys, _xs = tf.split(glimpse_prime_params, 4, axis=-1)
 
             # --- obtain final parameters for glimpse prime by modifying current pose ---
 
-            g_yt = yt + _yt
-            g_xt = xt + _xt
+            g_yt = yt + 0.2 * tf.nn.tanh(_yt)
+            g_xt = xt + 0.2 * tf.nn.tanh(_xt)
 
-            g_ys = ys * (1 + tf.nn.tanh(_ys))
-            g_xs = xs * (1 + tf.nn.tanh(_xs))
+            g_ys = ys * (1 + 0.2 * tf.nn.tanh(_ys))
+            g_xs = xs * (1 + 0.2 * tf.nn.tanh(_xs))
 
             # --- extract glimpse prime ---
 
@@ -261,11 +268,12 @@ class ObjectPropagationLayer(ObjectLayer):
 
         # --- encode glimpse ---
 
-        encoded_glimpse_prime = apply_object_wise(
-            self.glimpse_prime_encoder, glimpse_prime, self.A, self.is_training, n_trailing_dims=3)
+        if self.use_glimpse:
+            encoded_glimpse_prime = apply_object_wise(
+                self.glimpse_prime_encoder, glimpse_prime, self.A, self.is_training, n_trailing_dims=3)
 
-        if not is_posterior:
-            encoded_glimpse_prime = tf.zeros_like(encoded_glimpse_prime)
+        if not (self.use_glimpse and is_posterior):
+            encoded_glimpse_prime = tf.zeros((batch_size, n_objects, self.A), dtype=tf.float32)
 
         # --- predict distribution for d_box ---
 
@@ -306,11 +314,11 @@ class ObjectPropagationLayer(ObjectLayer):
         if "d_xs" in self.no_gradient:
             d_xs_logit = tf.stop_gradient(d_xs_logit)
 
-        new_yt = yt + d_yt_logit
-        new_xt = xt + d_xt_logit
+        new_yt = yt + 0.2 * tf.nn.tanh(d_yt_logit)
+        new_xt = xt + 0.2 * tf.nn.tanh(d_xt_logit)
 
-        new_ys = ys * (1 + tf.nn.tanh(d_ys_logit))
-        new_xs = xs * (1 + tf.nn.tanh(d_xs_logit))
+        new_ys = ys * (1 + 0.2 * tf.nn.tanh(d_ys_logit))
+        new_xs = xs * (1 + 0.2 * tf.nn.tanh(d_xs_logit))
 
         new_box = tf.concat([new_yt, new_xt, new_ys, new_xs], axis=-1)
 
@@ -338,16 +346,17 @@ class ObjectPropagationLayer(ObjectLayer):
 
         # --- extract a glimpse using new box ---
 
-        if is_posterior:
-            glimpse = extract_affine_glimpse(inp, self.object_shape, yt, xt, ys, xs, unit_square=True)
+        if is_posterior and self.use_glimpse:
+            glimpse = extract_affine_glimpse(inp, self.object_shape, new_yt, new_xt, new_ys, new_xs, unit_square=True)
         else:
             glimpse = tf.zeros((batch_size, *obj_leading_shape, *self.object_shape, self.image_depth))
 
-        encoded_glimpse = apply_object_wise(
-            self.glimpse_encoder, glimpse, self.A, self.is_training, n_trailing_dims=3)
+        if self.use_glimpse:
+            encoded_glimpse = apply_object_wise(
+                self.glimpse_encoder, glimpse, self.A, self.is_training, n_trailing_dims=3)
 
-        if not is_posterior:
-            encoded_glimpse = tf.zeros_like(encoded_glimpse)
+        if not (self.use_glimpse and is_posterior):
+            encoded_glimpse = tf.zeros((batch_size, n_objects, self.A), dtype=tf.float32)
 
         # --- predict change in attributes ---
 

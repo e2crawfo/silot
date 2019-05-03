@@ -60,6 +60,7 @@ basic_config = DEFAULT_CONFIG.copy(
     preserve_env=False,
     threshold=-np.inf,
     load_path=-1,
+    start_tensorboard=False,
 
     curriculum=[dict()],
 
@@ -75,9 +76,9 @@ basic_config = DEFAULT_CONFIG.copy(
     lr_schedule=1e-4,
     optimizer_spec="adam",
     max_grad_norm=10.0,
-    eval_step=1000,
-    display_step=1000,
-    render_step=1000,
+    eval_step=5000,
+    display_step=5000,
+    render_step=5000,
     max_steps=np.inf,
 
     noisy=True,
@@ -382,6 +383,45 @@ alg_configs["sspair_test"] = alg_configs["sspair"].copy(
     build_object_decoder=lambda scope: MLP(n_units=[64, 64], scope=scope),
 )
 
+alg_configs["isspair"] = alg_configs["sspair"].copy(
+    render_hook=ISSPAIR_RenderHook(is_training=True),
+    build_discovery_feature_fuser=lambda scope: ConvNet(
+        scope=scope, layers=[
+            dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
+            dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
+        ],
+    ),
+    prior_start_step=-1,
+    build_network=InterpretableSequentialSpair,
+    n_propagated_objects=16,
+    build_mlp=lambda scope: MLP(n_units=[64, 64], scope=scope),
+    n_hidden=64,
+
+    d_yx_prior_mean=0.0,
+    d_yx_prior_std=1.0,
+    d_hw_prior_mean=0.0,
+    d_hw_prior_std=1.0,
+    d_attr_prior_mean=0.0,
+    d_attr_prior_std=1.0,
+    d_z_prior_mean=0.0,
+    d_z_prior_std=1.0,
+    d_obj_log_odds_prior=.9 / .1,
+
+    selection_temperature=0.3,
+    select_top_k=True,
+    n_frames=6,
+    use_glimpse=True
+)
+
+alg_configs["load_isspair"] = alg_configs["isspair"].copy(
+    render_hook=ISSPAIR_RenderHook(is_training=False),
+    load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=isspair_seed=1299245926_2019_05_01_08_37_49/weights/best_of_stage_0",
+    n_train=4,
+    n_val=4,
+    noisy=False,
+    do_train=False,
+)
+
 alg_configs["test_isspair"] = alg_configs["sspair_test"].copy(
     render_hook=ISSPAIR_RenderHook(is_training=True),
     build_discovery_feature_fuser=lambda scope: ConvNet(
@@ -407,6 +447,7 @@ alg_configs["test_isspair"] = alg_configs["sspair_test"].copy(
     d_obj_log_odds_prior=.9 / .1,
 
     selection_temperature=0.3,
+    select_top_k=True,
 )
 
 for k, v in env_configs.items():
