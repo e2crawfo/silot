@@ -61,6 +61,8 @@ def extract_affine_glimpse(image, object_shape, yt, xt, ys, xs, unit_square=Fals
 class ObjectPropagationLayer(ObjectLayer):
     n_propagated_objects = Param()
     use_glimpse = Param()
+    where_t_scale = Param()
+    where_s_scale = Param()
 
     d_yx_prior_mean = Param()
     d_yx_prior_std = Param()
@@ -243,11 +245,11 @@ class ObjectPropagationLayer(ObjectLayer):
 
             # --- obtain final parameters for glimpse prime by modifying current pose ---
 
-            g_yt = yt + 0.2 * tf.nn.tanh(_yt)
-            g_xt = xt + 0.2 * tf.nn.tanh(_xt)
+            g_yt = yt + self.where_t_scale * tf.nn.tanh(_yt)
+            g_xt = xt + self.where_t_scale * tf.nn.tanh(_xt)
 
-            g_ys = ys * (1 + 0.2 * tf.nn.tanh(_ys))
-            g_xs = xs * (1 + 0.2 * tf.nn.tanh(_xs))
+            g_ys = ys * (1 + self.where_s_scale * tf.nn.tanh(_ys))
+            g_xs = xs * (1 + self.where_s_scale * tf.nn.tanh(_xs))
 
             # --- extract glimpse prime ---
 
@@ -314,11 +316,11 @@ class ObjectPropagationLayer(ObjectLayer):
         if "d_xs" in self.no_gradient:
             d_xs_logit = tf.stop_gradient(d_xs_logit)
 
-        new_yt = yt + 0.2 * tf.nn.tanh(d_yt_logit)
-        new_xt = xt + 0.2 * tf.nn.tanh(d_xt_logit)
+        new_yt = yt + self.where_t_scale * tf.nn.tanh(d_yt_logit)
+        new_xt = xt + self.where_t_scale * tf.nn.tanh(d_xt_logit)
 
-        new_ys = ys * (1 + 0.2 * tf.nn.tanh(d_ys_logit))
-        new_xs = xs * (1 + 0.2 * tf.nn.tanh(d_xs_logit))
+        new_ys = ys * (1 + self.where_s_scale * tf.nn.tanh(d_ys_logit))
+        new_xs = xs * (1 + self.where_s_scale * tf.nn.tanh(d_xs_logit))
 
         new_box = tf.concat([new_yt, new_xt, new_ys, new_xs], axis=-1)
 

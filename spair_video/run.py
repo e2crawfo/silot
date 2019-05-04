@@ -379,7 +379,7 @@ alg_configs["test_sspair"] = alg_configs["sspair"].copy(
 )
 
 alg_configs["isspair"] = alg_configs["sspair"].copy(
-    render_hook=ISSPAIR_RenderHook(is_training=True),
+    render_hook=ISSPAIR_RenderHook(),
     build_discovery_feature_fuser=lambda scope: ConvNet(
         scope=scope, layers=[
             dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
@@ -403,6 +403,8 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     d_obj_log_odds_prior=.9 / .1,
 
     use_glimpse=True,
+    where_t_scale=1.0,
+    where_s_scale=1.0,
     learn_prior=False,
 )
 
