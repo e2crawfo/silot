@@ -61,6 +61,7 @@ basic_config = DEFAULT_CONFIG.copy(
     threshold=-np.inf,
     load_path=-1,
     start_tensorboard=False,
+    render_final=False,
 
     curriculum=[dict()],
 
@@ -402,10 +403,9 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     d_z_prior_std=1.0,
     d_obj_log_odds_prior=.9 / .1,
 
-    selection_temperature=0.3,
-    select_top_k=True,
     n_frames=6,
-    use_glimpse=True
+    use_glimpse=True,
+    learn_prior=False,
 )
 
 alg_configs["load_isspair"] = alg_configs["isspair"].copy(
