@@ -122,10 +122,9 @@ env_configs = dict(
         val_example_range=(0.8, 0.9),
         test_example_range=(0.9, 1.0),
         digits=list(range(10)),
-        n_frames=5,
+        n_frames=8,
 
         backgrounds="",
-        backgrounds_sample_every=False,
         background_colours="",
         background_cfg=dict(mode="colour", colour="black"),
         postprocessing="",
@@ -146,12 +145,34 @@ env_configs = dict(
         n_distractors_per_image=0,
 
         n_frames=8,
-
         backgrounds="",
-        backgrounds_sample_every=False,
         background_colours="black",
         background_cfg=dict(mode="colour", colour="black"),
         postprocessing="",
+    )
+)
+
+env_configs["mnist_learned_background"] = env_configs["moving_mnist"].copy(
+    background_cfg=dict(
+        mode="learn_and_transform", A=8,
+        bg_shape=(60, 60),
+        build_encoder=lambda scope: BackgroundExtractor(
+            scope=scope,
+            build_cell=lambda n_hidden, scope: tf.contrib.rnn.GRUBlockCellV2(n_hidden, name=scope),
+            layers=[
+                dict(filters=8, kernel_size=4, strides=3),
+                dict(filters=8, kernel_size=4, strides=2),
+                dict(filters=8, kernel_size=4, strides=2),
+            ],
+        ),
+        build_decoder=lambda scope: ConvNet(
+            scope=scope,
+            layers=[
+                dict(filters=8, kernel_size=4, strides=2, transpose=True,),
+                dict(filters=8, kernel_size=4, strides=2, transpose=True,),
+                dict(filters=8, kernel_size=4, strides=3, transpose=True,),
+            ],
+        ),
     )
 )
 
@@ -322,28 +343,6 @@ alg_configs = dict(
         hw_prior_std=0.5,
         count_prior_decay_steps=1000,
         final_count_prior_log_odds=0.0125,
-
-        background_cfg=dict(
-            mode="learn_and_transform", A=8,
-            bg_shape=(60, 60),
-            build_encoder=lambda scope: BackgroundExtractor(
-                scope=scope,
-                build_cell=lambda n_hidden, scope: tf.contrib.rnn.GRUBlockCellV2(n_hidden, name=scope),
-                layers=[
-                    dict(filters=8, kernel_size=4, strides=3),
-                    dict(filters=8, kernel_size=4, strides=2),
-                    dict(filters=8, kernel_size=4, strides=2),
-                ],
-            ),
-            build_decoder=lambda scope: ConvNet(
-                scope=scope,
-                layers=[
-                    dict(filters=8, kernel_size=4, strides=2, transpose=True,),
-                    dict(filters=8, kernel_size=4, strides=2, transpose=True,),
-                    dict(filters=8, kernel_size=4, strides=3, transpose=True,),
-                ],
-            ),
-        )
     ),
 )
 
@@ -403,7 +402,6 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     d_z_prior_std=1.0,
     d_obj_log_odds_prior=.9 / .1,
 
-    n_frames=6,
     use_glimpse=True,
     learn_prior=False,
 )
