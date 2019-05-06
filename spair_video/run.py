@@ -402,6 +402,7 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     d_z_prior_std=1.0,
     d_obj_log_odds_prior=.9 / .1,
 
+    learn_glimpse_prime=False,
     use_glimpse=True,
     where_t_scale=1.0,
     where_s_scale=1.0,

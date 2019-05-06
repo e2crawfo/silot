@@ -23,95 +23,7 @@ from spair_video.core import VideoNetwork
 from spair_video.propagation import ObjectPropagationLayer
 
 
-def probabilistic_select_objects(propagated, discovered, temperature):
-    """ Assumes first dimension is batch size, and all other dimensions except the last iterate over objects. """
-    batch_size, *prop_other, final = tf_shape(propagated.obj)
-    assert final == 1
-    n_prop_objects = np.product(prop_other)
-
-    _, *disc_other, _ = tf_shape(discovered.obj)
-    n_disc_objects = np.product(disc_other)
-
-    propagated_presence = tf.reshape(propagated.obj, (batch_size, n_prop_objects))
-    discovered_presence = tf.reshape(discovered.obj, (batch_size, n_disc_objects))
-
-    remaining_presence = []
-    weights = []
-    used_weights = []
-    final_weights = []
-
-    for i in range(n_prop_objects):
-        remaining_presence.append(discovered_presence)
-
-        probs = discovered_presence / (tf.reduce_sum(discovered_presence, axis=-1, keepdims=True) + 1e-6)
-        _weights = tfp.distributions.RelaxedOneHotCategorical(temperature, probs=probs).sample()
-        emptiness = 1 - propagated_presence[:, i:i+1]
-        _used_weights = emptiness * _weights
-        _final_weights = _used_weights * discovered_presence
-        discovered_presence = discovered_presence * (1-_used_weights)
-
-        weights.append(_weights)
-        used_weights.append(_used_weights)
-        final_weights.append(_final_weights)
-
-    remaining_presence = tf.stack(remaining_presence, axis=1)
-    weights = tf.stack(weights, axis=1)
-    used_weights = tf.stack(used_weights, axis=1)
-    final_weights = tf.stack(final_weights, axis=1)
-
-    selected_objects = AttrDict(
-        obj=propagated_presence[:, :, None] + tf.reduce_sum(final_weights, axis=2, keepdims=True),
-    )
-
-    keys = "normalized_box attr z".split()
-    for key in keys:
-        selected_objects[key] = propagated_presence[:, :, None] * propagated[key]
-
-        final_dim = tf_shape(discovered[key])[-1]
-        disc_value = tf.reshape(discovered[key], (batch_size, 1, n_disc_objects, final_dim))
-
-        selected_objects[key] += tf.reduce_sum(final_weights[:, :, :, None] * disc_value, axis=2)
-
-    selected_objects.all = tf.concat(
-        [selected_objects.normalized_box, selected_objects.attr, selected_objects.z, selected_objects.obj], axis=-1)
-
-    yt, xt, ys, xs = tf.split(selected_objects.normalized_box, 4, axis=-1)
-
-    selected_objects.update(
-        yt=yt,
-        xt=xt,
-        ys=ys,
-        xs=xs,
-        pred_n_objects=tf.reduce_sum(selected_objects.obj, axis=(1, 2)),
-        pred_n_objects_hard=tf.reduce_sum(tf.round(selected_objects.obj), axis=(1, 2)),
-        final_weights=final_weights
-    )
-
-    return selected_objects, remaining_presence, weights, used_weights, final_weights
-
-
 def top_k_select_objects(propagated, discovered):
-    """ Select top k from all objects, but any values that come from the propagated objects should go back in the same place...
-        Actually...I can probably most emulate this by making the temperature of the concretes super high....
-        But we can't set the temperature to be high on the object-ness, only on the selection. Which means we are still going
-        to get interpolation between selected objects and the propagated object that previously occupied that slot.
-
-        In original SPAIR, we only had to turn objects on or off, never interpolate between objects, and that worked well.
-        How do we do the same thing here? The answer is clearly to keep all objects from each time step (so the number
-        of propagated objects at any time is H*W*f, where f is the frame index.
-
-        That would clearly be expensive, and the majority of objects will not be on anyway. So let's save ourselves some
-        computation and only choose objects that want to be on? Especially because we only allow objects to
-        become less visible than they were previously during propagation.
-        Also...we can choose n_prop_objects to be larger than H*W, thereby interpolating between the full scheme and
-        the more computationally tractable scheme.
-
-        Because of the cutoff, there will only be competition for selection within objects that have already been selected.
-        However...one nice feature: for the first timestep, there is room for all bottom-up objects, because all the propagated
-        objects will have obj=0.0. So this might not be such a big deal. But will it become difficult have objects
-        come into existence on subsequent steps? Possibly...
-
-    """
     batch_size, *prop_other, final = tf_shape(propagated.obj)
     assert final == 1
     n_prop_objects = np.product(prop_other)
@@ -132,9 +44,9 @@ def top_k_select_objects(propagated, discovered):
     from_prop = tf.cast(top_k_indices < n_prop_objects, tf.int32)
     n_from_prop = tf.reduce_sum(from_prop, axis=1)
 
-    scatter_indices = tf.concat([
-        tf.tile(tf.range(batch_size)[:, None, None], (1, n_prop_objects, 1)),
-        top_k_indices[:, :, None]],
+    scatter_indices = tf.concat(
+        [tf.tile(tf.range(batch_size)[:, None, None], (1, n_prop_objects, 1)),
+         top_k_indices[:, :, None]],
         axis=2
     )
 
@@ -146,7 +58,7 @@ def top_k_select_objects(propagated, discovered):
 
     new_indices = []
     for i in range(n_prop_objects):
-        # gather indices to use if i is not present in top_k
+        # indices to use for gather if i is not present in top_k
         gather_indices = tf.concat([tf.range(batch_size)[:, None], from_disc_idx[:, None]], axis=1)
         other = tf.gather_nd(top_k_indices, gather_indices)
 
@@ -372,9 +284,6 @@ class InterpretableSequentialSpair(VideoNetwork):
                 render_tensors = posterior_render_tensors
                 selected_objects = posterior_selected_objects
 
-            # Finally, global hidden state is updated based on the set of objects...and maybe also the image? Yeah,
-            # why not. And it should be a latent variable.
-
             # --- appearance of object sets for plotting ---
 
             posterior_propagated_objects.update(
@@ -390,7 +299,7 @@ class InterpretableSequentialSpair(VideoNetwork):
             # the standard formula for KL divergence between concrete distributions.
 
             prop_indep_prior_kl = self.propagation_layer.compute_kl(posterior_propagated_objects)
-            disc_indep_prior_kl = self.discovery_layer.compute_kl(posterior_discovered_objects)
+            disc_indep_prior_kl = self.discovery_layer.compute_kl(posterior_discovered_objects, existing_objects=propagated_objects.obj)
 
             _tensors = AttrDict(
 
@@ -868,7 +777,10 @@ class ISSPAIR_RenderHook(RenderHook):
                             (1., 0), 0.2, 1, clip_on=False, transform=ax.transAxes, facecolor=color)
                         ax.add_patch(obj_rect)
 
-                        ax.set_title(flt(obj=obj, robj=render_obj, z=z, final_weight=fw))
+                        yt, xt, ys, xs = _fetched.disc.normalized_box[idx, t, h, w, b]
+
+                        nbox = "bx={:.2f},{:.2f},{:.2f},{:.2f}".format(yt, xt, ys, xs)
+                        ax.set_title(flt(nbox, obj=obj, robj=render_obj, z=z, final_weight=fw))
 
                         ax = disc_axes[h * B + b, 3 * w + 2]
                         self.imshow(ax, _fetched.disc.appearance[idx, t, h, w, b, :, :, 3], cmap="gray")
@@ -901,10 +813,9 @@ class ISSPAIR_RenderHook(RenderHook):
 
                         ax = prop_axes[3*k+1]
                         self.imshow(ax, _fetched.prop.appearance[idx, t, k, :, :, :3])
-                        ax.set_title(flt(
-                            d_obj=d_obj, obj=obj, z=z, yt=yt, xt=xt, ys=ys, xs=xs,
-                            dxsl=d_xs_logit, dysl=d_ys_logit, dxtl=d_xt_logit, dytl=d_yt_logit,
-                        ))
+                        nbox = "bx={:.2f},{:.2f},{:.2f},{:.2f}".format(yt, xt, ys, xs)
+                        d_nbox = "dbxl={:.2f},{:.2f},{:.2f},{:.2f}".format(d_yt_logit, d_xt_logit, d_ys_logit, d_xs_logit)
+                        ax.set_title(flt(nbox + ", " + d_nbox, dobj=d_obj, obj=obj, z=z,))
 
                         fw = final_weights[k]
                         color = fw * self.selected_color + (1-fw) * self.unselected_color

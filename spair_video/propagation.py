@@ -61,6 +61,7 @@ def extract_affine_glimpse(image, object_shape, yt, xt, ys, xs, unit_square=Fals
 class ObjectPropagationLayer(ObjectLayer):
     n_propagated_objects = Param()
     use_glimpse = Param()
+    learn_glimpse_prime = Param()
     where_t_scale = Param()
     where_s_scale = Param()
 
@@ -203,7 +204,8 @@ class ObjectPropagationLayer(ObjectLayer):
         self.maybe_build_subnet("d_obj_network", key="d_obj", builder=cfg.build_lateral)
 
         if self.use_glimpse:
-            self.maybe_build_subnet("glimpse_prime_network", key="glimpse_prime", builder=cfg.build_lateral)
+            if self.learn_glimpse_prime:
+                self.maybe_build_subnet("glimpse_prime_network", key="glimpse_prime", builder=cfg.build_lateral)
             self.maybe_build_subnet("glimpse_prime_encoder", builder=cfg.build_object_encoder)
             self.maybe_build_subnet("glimpse_encoder", builder=cfg.build_object_encoder)
 
@@ -230,26 +232,29 @@ class ObjectPropagationLayer(ObjectLayer):
 
         base_features = tf.concat([features, is_posterior_tf], axis=-1)
 
-        if self.use_glimpse:
+        yt, xt, ys, xs = tf.split(objects.normalized_box, 4, axis=-1)
+
+        if self.use_glimpse and self.learn_glimpse_prime:
             # Do this regardless of is_posterior, otherwise ScopedFunction gets messed up
             glimpse_prime_params = apply_object_wise(self.glimpse_prime_network, base_features, 4, self.is_training)
         else:
             glimpse_prime_params = tf.zeros_like(base_features[..., :4])
 
-        yt, xt, ys, xs = tf.split(objects.normalized_box, 4, axis=-1)
-
         if is_posterior and self.use_glimpse:
-            # --- predict parameters for glimpse prime ---
 
-            _yt, _xt, _ys, _xs = tf.split(glimpse_prime_params, 4, axis=-1)
+            if self.learn_glimpse_prime:
+                # --- obtain final parameters for glimpse prime by modifying current pose ---
+                _yt, _xt, _ys, _xs = tf.split(glimpse_prime_params, 4, axis=-1)
+                g_yt = yt + self.where_t_scale * tf.nn.tanh(_yt)
+                g_xt = xt + self.where_t_scale * tf.nn.tanh(_xt)
 
-            # --- obtain final parameters for glimpse prime by modifying current pose ---
-
-            g_yt = yt + self.where_t_scale * tf.nn.tanh(_yt)
-            g_xt = xt + self.where_t_scale * tf.nn.tanh(_xt)
-
-            g_ys = ys * (1 + self.where_s_scale * tf.nn.tanh(_ys))
-            g_xs = xs * (1 + self.where_s_scale * tf.nn.tanh(_xs))
+                g_ys = ys * (1 + self.where_s_scale * tf.nn.tanh(_ys))
+                g_xs = xs * (1 + self.where_s_scale * tf.nn.tanh(_xs))
+            else:
+                g_yt = yt
+                g_xt = xt
+                g_ys = 2.0 * ys
+                g_xs = 2.0 * xs
 
             # --- extract glimpse prime ---
 
