@@ -1,5 +1,6 @@
 import numpy as np
 import tensorflow as tf
+import sonnet as snt
 
 from dps import cfg
 from dps.hyper import run_experiment
@@ -60,7 +61,7 @@ basic_config = DEFAULT_CONFIG.copy(
     preserve_env=False,
     threshold=-np.inf,
     load_path=-1,
-    start_tensorboard=False,
+    start_tensorboard=10,
     render_final=False,
 
     curriculum=[dict()],
@@ -200,8 +201,9 @@ def spair_prepare_func():
     from dps import cfg
     cfg.anchor_boxes = [cfg.tile_shape]
     cfg.count_prior_log_odds = (
-        "Exp(start=1000000.0, end={}, decay_rate=0.1, "
+        "Exp(start={}, end={}, decay_rate=0.1, "
         "decay_steps={}, log=True)".format(
+            cfg.initial_count_prior_log_odds,
             cfg.final_count_prior_log_odds, cfg.count_prior_decay_steps)
     )
 
@@ -255,6 +257,21 @@ alg_configs = dict(
         render_hook=TBA_RenderHook(),
         # fixed_values=dict(conf=1.),
         discrete_eval=False,
+    ),
+    sqair=Config(
+        disc_prior_type='cat',
+        step_success_prob=0.75,
+        disc_step_bias=1.,
+        prop_step_bias=5.,
+        sample_from_prior=False,
+        rec_where_prior=True,
+        rnn_class=snt.VanillaRNN,
+        time_rnn_class=snt.GRU,
+        prior_rnn_class=snt.GRU,
+        optimizer_spec="rmsprop,momenum=0.9",
+        learning_rate=1e-5,
+        schedule="4,6,10",
+        # TODO learning rate decay by 1./3 each segment...elements of each schedule give relative lengths of each segment.
     ),
     sspair=Config(
         build_network=SequentialSpair,
@@ -342,6 +359,9 @@ alg_configs = dict(
         hw_prior_mean=np.log(0.1/0.9),
         hw_prior_std=0.5,
         count_prior_decay_steps=1000,
+        # initial_count_prior_log_odds=10,
+        initial_count_prior_log_odds=1e6,
+        # final_count_prior_log_odds=-0.25,
         final_count_prior_log_odds=0.0125,
     ),
 )
@@ -402,20 +422,35 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     d_z_prior_std=1.0,
     d_obj_log_odds_prior=.9 / .1,
 
+    discovery_dropout_prob=0.5,
     learn_glimpse_prime=False,
     use_glimpse=True,
+    learn_prior=False,
+    where_t_scale=0.2,
+    where_s_scale=0.2,
+)
+
+alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
+    d_yx_prior_std=0.3,
+    d_hw_prior_std=0.1,
     where_t_scale=1.0,
     where_s_scale=1.0,
-    learn_prior=False,
 )
 
 alg_configs["load_isspair"] = alg_configs["isspair"].copy(
-    render_hook=ISSPAIR_RenderHook(is_training=False),
-    load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=isspair_seed=1299245926_2019_05_01_08_37_49/weights/best_of_stage_0",
+    render_hook=ISSPAIR_RenderHook(),
+    load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=isspair_seed=9239644_2019_05_07_08_49_23/weights/best_of_stage_0",
     n_train=4,
     n_val=4,
     noisy=False,
     do_train=False,
+    d_yx_prior_std=0.1,
+    d_hw_prior_std=0.1,
+    where_t_scale=1.0,
+    where_s_scale=1.0,
+    n_frames=3,
+    min_digits=1,
+    max_digits=1,
 )
 
 alg_configs["test_isspair"] = alg_configs["isspair"].copy(

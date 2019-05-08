@@ -4,6 +4,8 @@ import tensorflow_probability as tfp
 from itertools import product
 from orderedattrdict import AttrDict
 import pprint
+import shutil
+import os
 
 import matplotlib.pyplot as plt
 from matplotlib import animation
@@ -109,6 +111,7 @@ class InterpretableSequentialSpair(VideoNetwork):
     prior_start_step = Param()
     n_hidden = Param()
     learn_prior = Param()
+    discovery_dropout_prob = Param()
 
     discovery_layer = None
     discovery_feature_extractor = None
@@ -264,6 +267,19 @@ class InterpretableSequentialSpair(VideoNetwork):
 
             posterior_discovered_objects = self.discovery_layer(
                 self.inp[:, f], posterior_discovery_features, self.is_training, is_posterior=True)
+
+            if f > 0:
+                discovery_mask_dist = tfp.distributions.Bernoulli(
+                    (1.-self.discovery_dropout_prob) * tf.ones(self.batch_size))
+                discovery_mask = tf.cast(discovery_mask_dist.sample(), tf.float32)
+                discovery_mask = (
+                    self.float_is_training * discovery_mask
+                    + (1 - self.float_is_training) * tf.ones(self.batch_size)
+                )
+                discovery_mask = discovery_mask[:, None, None, None, None]
+
+                posterior_discovered_objects.obj = discovery_mask * posterior_discovered_objects.obj
+                posterior_discovered_objects.render_obj = discovery_mask * posterior_discovered_objects.render_obj
 
             # --- object selection ---
 
@@ -568,9 +584,7 @@ class ISSPAIR_RenderHook(RenderHook):
 
         for mode in modes.split():
             for kind in "disc prop select".split():
-                nb = fetched[mode][kind].normalized_box
-                nb *= [image_height, image_width, image_height, image_width]
-                fetched[mode][kind].normalized_box = nb.reshape(N, T, -1, 4)
+                fetched[mode][kind].normalized_box *= [image_height, image_width, image_height, image_width]
 
             output = fetched[mode].render.output
             fetched[mode].render.diff = self.normalize_images(np.abs(inp - output).mean(axis=-1, keepdims=True))
@@ -948,3 +962,9 @@ class ISSPAIR_RenderHook(RenderHook):
             anim.save(path, writer='ffmpeg', codec='hevc', extra_args=['-preset', 'ultrafast'])
 
             plt.close(fig)
+
+            shutil.copyfile(
+                path,
+                os.path.join(
+                    os.path.dirname(path),
+                    'latest_stage{:0>4}.mp4'.format(updater.stage_idx)))

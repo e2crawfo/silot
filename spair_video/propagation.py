@@ -8,11 +8,10 @@ Normal = tfp.distributions.Normal
 
 from dps import cfg
 from dps.utils import Param
-from dps.utils.tf import build_scheduled_value, FIXED_COLLECTION, ScopedFunction, tf_shape, apply_object_wise
+from dps.utils.tf import tf_shape, apply_object_wise
 
-from auto_yolo.tf_ops import render_sprites, resampler_edge
-from auto_yolo.models.core import (
-    concrete_binary_pre_sigmoid_sample, concrete_binary_sample_kl, tf_safe_log)
+from auto_yolo.tf_ops import resampler_edge
+from auto_yolo.models.core import concrete_binary_pre_sigmoid_sample, concrete_binary_sample_kl
 from auto_yolo.models.object_layer import ObjectLayer
 
 
@@ -32,20 +31,19 @@ def extract_affine_glimpse(image, object_shape, yt, xt, ys, xs, unit_square=Fals
 
     if unit_square:
         # center instead of top left
-        yt += ys / 2
-        xt += xs / 2
+        cyt = yt + ys / 2
+        cxt = xt + xs / 2
 
         # change coordinate system
-        xt = 2 * xt - 1
-        yt = 2 * yt - 1
+        cyt = 2 * cyt - 1
+        cxt = 2 * cxt - 1
     else:
-        # center instead of top left
-        yt += ys
-        xt += xs
+        cyt = yt + ys
+        cxt = xt + xs
 
     leading_shape = tf_shape(yt)[:-1]
 
-    _boxes = tf.concat([xs, xt, ys, yt], axis=-1)
+    _boxes = tf.concat([xs, cxt, ys, cyt], axis=-1)
     _boxes = tf.reshape(_boxes, (-1, 4))
 
     grid_coords = warper(_boxes)
@@ -149,8 +147,6 @@ class ObjectPropagationLayer(ObjectLayer):
         if "d_xs" in self.no_gradient:
             d_xs_kl = tf.stop_gradient(d_xs_kl)
 
-        d_box_kl = tf.concat([d_yt_kl, d_xt_kl, d_ys_kl, d_xs_kl], axis=-1)
-
         # --- d_attr ---
 
         d_attr_kl = tensors["d_attr_dist"].kl_divergence(prior["d_attr_dist"])
@@ -184,7 +180,6 @@ class ObjectPropagationLayer(ObjectLayer):
             d_xt_kl=d_xt_kl,
             d_ys_kl=d_ys_kl,
             d_xs_kl=d_xs_kl,
-            d_box_kl=d_box_kl,
             d_attr_kl=d_attr_kl,
             d_z_kl=d_z_kl,
             d_obj_kl=d_obj_kl,
@@ -234,6 +229,10 @@ class ObjectPropagationLayer(ObjectLayer):
 
         yt, xt, ys, xs = tf.split(objects.normalized_box, 4, axis=-1)
 
+        # center instead of top left
+        cyt = yt + ys / 2
+        cxt = xt + xs / 2
+
         if self.use_glimpse and self.learn_glimpse_prime:
             # Do this regardless of is_posterior, otherwise ScopedFunction gets messed up
             glimpse_prime_params = apply_object_wise(self.glimpse_prime_network, base_features, 4, self.is_training)
@@ -245,16 +244,21 @@ class ObjectPropagationLayer(ObjectLayer):
             if self.learn_glimpse_prime:
                 # --- obtain final parameters for glimpse prime by modifying current pose ---
                 _yt, _xt, _ys, _xs = tf.split(glimpse_prime_params, 4, axis=-1)
-                g_yt = yt + self.where_t_scale * tf.nn.tanh(_yt)
-                g_xt = xt + self.where_t_scale * tf.nn.tanh(_xt)
+
+                g_yt = cyt + self.where_t_scale * tf.nn.tanh(_yt)
+                g_xt = cxt + self.where_t_scale * tf.nn.tanh(_xt)
 
                 g_ys = ys * (1 + self.where_s_scale * tf.nn.tanh(_ys))
                 g_xs = xs * (1 + self.where_s_scale * tf.nn.tanh(_xs))
             else:
-                g_yt = yt
-                g_xt = xt
+                g_yt = cyt
+                g_xt = cxt
                 g_ys = 2.0 * ys
                 g_xs = 2.0 * xs
+
+            # convert from center to top/left
+            g_yt -= g_ys / 2
+            g_xt -= g_xs / 2
 
             # --- extract glimpse prime ---
 
@@ -321,11 +325,14 @@ class ObjectPropagationLayer(ObjectLayer):
         if "d_xs" in self.no_gradient:
             d_xs_logit = tf.stop_gradient(d_xs_logit)
 
-        new_yt = yt + self.where_t_scale * tf.nn.tanh(d_yt_logit)
-        new_xt = xt + self.where_t_scale * tf.nn.tanh(d_xt_logit)
+        new_cyt = cyt + self.where_t_scale * tf.nn.tanh(d_yt_logit)
+        new_cxt = cxt + self.where_t_scale * tf.nn.tanh(d_xt_logit)
 
         new_ys = ys * (1 + self.where_s_scale * tf.nn.tanh(d_ys_logit))
         new_xs = xs * (1 + self.where_s_scale * tf.nn.tanh(d_xs_logit))
+
+        new_yt = new_cyt - new_ys / 2
+        new_xt = new_cxt - new_xs / 2
 
         new_box = tf.concat([new_yt, new_xt, new_ys, new_xs], axis=-1)
 
