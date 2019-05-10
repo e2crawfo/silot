@@ -14,6 +14,7 @@ from auto_yolo.models.core import Updater
 
 from spair_video.core import SimpleVideoVAE, SimpleVAE_RenderHook, BackgroundExtractor
 from spair_video.tracking_by_animation import TrackingByAnimation, TbaBackbone, TBA_RenderHook
+from spair_video.seq_air import SQAIR, SQAIRUpdater
 from spair_video.sspair import SequentialSpair, SequentialSpair_RenderHook
 from spair_video.interpretable_sspair import InterpretableSequentialSpair, ISSPAIR_RenderHook
 
@@ -259,10 +260,21 @@ alg_configs = dict(
         discrete_eval=False,
     ),
     sqair=Config(
+        get_updater=SQAIRUpdater,
+        build_network=SQAIR,
+        debug=False,
+
+        batch_size=32,
+        constant_prop_prior=0.0,
         disc_prior_type='cat',
         step_success_prob=0.75,
         disc_step_bias=1.,
         prop_step_bias=5.,
+        prop_prior_step_bias=10.,
+        prop_prior_type='rnn',
+        masked_glimpse=True,
+        k_particles=5,
+        n_steps_per_image=3,
         sample_from_prior=False,
         rec_where_prior=True,
         rnn_class=snt.VanillaRNN,
@@ -271,7 +283,17 @@ alg_configs = dict(
         optimizer_spec="rmsprop,momenum=0.9",
         learning_rate=1e-5,
         schedule="4,6,10",
+        l2_schedule=0.0,
         # TODO learning rate decay by 1./3 each segment...elements of each schedule give relative lengths of each segment.
+        n_layers=2,
+        n_hidden=8*32,
+        n_what=50,
+        glimpse_size=(20, 20),
+        transform_var_bias=-3.,
+        output_scale=0.25,
+        output_std=0.3,
+        scale_prior=(-2., -2.),
+        max_steps=int(2e6),
     ),
     sspair=Config(
         build_network=SequentialSpair,
@@ -359,9 +381,7 @@ alg_configs = dict(
         hw_prior_mean=np.log(0.1/0.9),
         hw_prior_std=0.5,
         count_prior_decay_steps=1000,
-        # initial_count_prior_log_odds=10,
         initial_count_prior_log_odds=1e6,
-        # final_count_prior_log_odds=-0.25,
         final_count_prior_log_odds=0.0125,
     ),
 )
@@ -431,6 +451,7 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
 )
 
 alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
+    d_attr_prior_std=0.1,
     d_yx_prior_std=0.3,
     d_hw_prior_std=0.1,
     where_t_scale=1.0,
