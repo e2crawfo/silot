@@ -315,7 +315,8 @@ class InterpretableSequentialSpair(VideoNetwork):
             # the standard formula for KL divergence between concrete distributions.
 
             prop_indep_prior_kl = self.propagation_layer.compute_kl(posterior_propagated_objects)
-            disc_indep_prior_kl = self.discovery_layer.compute_kl(posterior_discovered_objects, existing_objects=propagated_objects.obj)
+            disc_indep_prior_kl = self.discovery_layer.compute_kl(
+                posterior_discovered_objects, existing_objects=propagated_objects.obj)
 
             _tensors = AttrDict(
 
@@ -561,9 +562,7 @@ class ISSPAIR_RenderHook(RenderHook):
     def __call__(self, updater):
         fetched = self._fetch(updater)
         fetched = Config(fetched)
-
         self._prepare_fetched(updater, fetched)
-
         self._plot_patches(updater, fetched)
 
     @staticmethod

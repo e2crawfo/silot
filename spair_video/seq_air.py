@@ -2,20 +2,27 @@ import tensorflow as tf
 import numpy as np
 from functools import partial
 from orderedattrdict import AttrDict
+import itertools
+
+import matplotlib.pyplot as plt
+from matplotlib import animation
+import matplotlib.gridspec as gridspec
+import matplotlib.patches as patches
+from matplotlib.colors import to_rgb
 
 from dps import cfg
-from dps.utils import Param
+from dps.utils import Param, map_structure, Config
 from dps.utils.tf import (
-    build_gradient_train_op, ScopedFunction, build_scheduled_value, FIXED_COLLECTION, tf_shape)
+    build_gradient_train_op, ScopedFunction, build_scheduled_value, FIXED_COLLECTION, tf_shape, RenderHook)
 from dps.updater import DataManager
 
-from auto_yolo.models.core import mAP, Updater as _Updater
+from auto_yolo.models.core import mAP, Updater as _Updater, Evaluator
 
 from spair_video.core import VideoNetwork
 
 from sqair.sqair_modules import Propagate, Discover
 from sqair.core import DiscoveryCore, PropagationCore
-from sqair.modules import Encoder, StochasticTransformParam, StepsPredictor, Decoder, AIRDecoder, AIREncoder
+from sqair.modules import Encoder, StochasticTransformParam, StepsPredictor, Decoder, AIRDecoder, AIREncoder, SpatialTransformer
 from sqair.seq import SequentialAIR
 from sqair.propagate import make_prior, SequentialSSM
 from sqair import index
@@ -32,6 +39,8 @@ class SQAIRUpdater(_Updater):
     output_std = Param()
     k_particles = Param()
     debug = Param()
+    stage_steps = Param()
+    seq_len = Param()
 
     def __init__(self, env, scope=None, **kwargs):
         self.lr_schedule = build_scheduled_value(self.lr_schedule, "lr")
@@ -82,7 +91,7 @@ class SQAIRUpdater(_Updater):
 
         return tf.summary.merge([rec, inpt])
 
-    def compute_validation_pixelwise_mean(self):
+    def compute_validation_pixelwise_mean(self, data):
         sess = tf.get_default_session()
 
         mean = None
@@ -91,7 +100,7 @@ class SQAIRUpdater(_Updater):
 
         while True:
             try:
-                inp = sess.run(self.data["image"], feed_dict=feed_dict)
+                inp = sess.run(data["image"], feed_dict=feed_dict)
             except tf.errors.OutOfRangeError:
                 break
 
@@ -112,17 +121,40 @@ class SQAIRUpdater(_Updater):
 
         data = self.data_manager.iterator.get_next()
 
-        obs = data["image"]
+        self.tensors = AttrDict()
+
+        # if "label" in data:
+        #     self._tensors.update(
+        #         targets=data["label"],
+        #     )
+
+        # if "background" in data:
+        #     self._tensors.update(
+        #         background=data["background"],
+        #     )
+
+        data['mean_img'] = self.compute_validation_pixelwise_mean(data)
+
+        global_step = tf.to_int32(tf.train.get_or_create_global_step())
+        stage = global_step // self.stage_steps
+        effective_n_frames = tf.minimum(self.seq_len + stage, self.n_frames)
+
         self.batch_size = cfg.batch_size
 
-        shape = list(tf_shape(obs))
+        shape = list(tf_shape(data['image']))
         shape[0] = cfg.batch_size
-        obs.set_shape(shape)
+        data['image'] = tf.reshape(data['image'], shape)[:, :effective_n_frames]
 
-        obs = tf.transpose(obs, (1, 0, 2, 3, 4))
+        shape = list(tf_shape(data['annotations']['data']))
+        shape[0] = cfg.batch_size
+        data['annotations']['data'] = tf.reshape(data['annotations']['data'], shape)[:, :effective_n_frames]
 
-        self.tiled_obs = index.tile_input_for_iwae(obs, self.k_particles, with_time=True)
-        data["tiled_obs"] = self.tiled_obs
+        shape = list(tf_shape(data['annotations']['mask']))
+        shape[0] = cfg.batch_size
+        data['annotations']['mask'] = tf.reshape(data['annotations']['mask'], shape)[:, :effective_n_frames]
+
+        data['processed_image'] = index.tile_input_for_iwae(
+            tf.transpose(data['image'], (1, 0, 2, 3, 4)), self.k_particles, with_time=True)
 
         self.data = data
 
@@ -133,37 +165,69 @@ class SQAIRUpdater(_Updater):
         network_losses = network_outputs["losses"]
         assert not network_losses
 
-        self.tensors = network_outputs
+        self.tensors.update(network_tensors)
+        self.tensors['inp'] = data['image']
+        self.tensors['where_coords'] = SpatialTransformer.to_coords(self.tensors['where'])
 
         self.recorded_tensors = recorded_tensors = dict(global_step=tf.train.get_or_create_global_step())
         self.recorded_tensors.update(network_recorded_tensors)
+        self.recorded_tensors.update(
+            effective_n_frames=tf.cast(effective_n_frames, tf.float32),
+            stage=tf.cast(stage, tf.float32),
+        )
 
-        # --- loss ---
+        # --- values for training ---
 
-        log_weights = tf.reduce_sum(self.outputs.log_weights_per_timestep, 0)
+        log_weights = tf.reduce_sum(self.tensors.log_weights_per_timestep, 0)
         self.log_weights = tf.reshape(log_weights, (self.batch_size, self.k_particles))
 
         self.elbo_vae = tf.reduce_mean(self.log_weights)
         self.elbo_iwae_per_example = targets.iwae(self.log_weights)
         self.elbo_iwae = tf.reduce_mean(self.elbo_iwae_per_example)
 
-        self.normalised_elbo_vae = self.elbo_vae / tf.to_float(self.n_timesteps)
-        self.normalised_elbo_iwae = self.elbo_iwae / tf.to_float(self.n_timesteps)
+        self.normalised_elbo_vae = self.elbo_vae / tf.to_float(effective_n_frames)
+        self.normalised_elbo_iwae = self.elbo_iwae / tf.to_float(effective_n_frames)
 
         self.importance_weights = tf.stop_gradient(tf.nn.softmax(self.log_weights, -1))
         self.ess = ops.ess(self.importance_weights, average=True)
         self.iw_distrib = tf.distributions.Categorical(probs=self.importance_weights)
         self.iw_resampling_idx = self.iw_distrib.sample()
 
+        # --- count accuracy ---
+
+        if "annotations" in data:
+            self.tensors.update(
+                annotations=data["annotations"]["data"],
+                n_annotations=data["annotations"]["shapes"][:, 1],
+                n_valid_annotations=tf.to_int32(
+                    tf.reduce_sum(
+                        data["annotations"]["data"][:, :, :, 0]
+                        * tf.to_float(data["annotations"]["mask"][:, :, :, 0]),
+                        axis=2
+                    )
+                )
+            )
+
+            gt_num_steps = tf.transpose(self.tensors.n_valid_annotations, (1, 0))[:, :, None]
+            num_steps_per_sample = tf.reshape(
+                self.tensors.num_steps_per_sample, (-1, self.batch_size, self.k_particles))
+            count_1norm = tf.abs(num_steps_per_sample - tf.cast(gt_num_steps, tf.float32))
+            count_error = tf.cast(count_1norm > 0.5, tf.float32)
+
+            self.recorded_tensors.update(
+                count_1norm=self._imp_weighted_mean(count_1norm),
+                count_error=self._imp_weighted_mean(count_error),
+            )
+
         # --- losses ---
 
-        if hasattr(self, 'discrete_log_prob'):
-            log_probs = tf.reduce_sum(self.discrete_log_prob, 0)
+        if 'discrete_log_prob' in self.tensors:
+            log_probs = tf.reduce_sum(self.tensors.discrete_log_prob, 0)
             target = targets.vimco(self.log_weights, log_probs, self.elbo_iwae_per_example)
         else:
             target = -self.elbo_iwae
 
-        loss_reconstruction = target / tf.to_float(self.n_timesteps)
+        loss_reconstruction = target / tf.to_float(effective_n_frames)
         loss_l2 = targets.l2_reg(self.l2_schedule)
         self.loss = loss_reconstruction + loss_l2
 
@@ -184,7 +248,7 @@ class SQAIRUpdater(_Updater):
         # --- record ---
 
         self.tensors['mse_per_sample'] = tf.reduce_mean(
-            (self.tiled_obs - self.tensors['canvas']) ** 2, (0, 2, 3, 4))
+            (data['processed_image'] - self.tensors['canvas']) ** 2, (0, 2, 3, 4))
         self.raw_mse = tf.reduce_mean(self.tensors['mse_per_sample'])
 
         self._log_resampled('mse')
@@ -202,59 +266,41 @@ class SQAIRUpdater(_Updater):
 
         recorded_tensors.update(
             raw_mse=self.raw_mse,
-            log_weights=self.log_weights,
             elbo_vae=self.elbo_vae,
-            elbo_iwae_per_example=self.elbo_iwae_per_example,
             elbo_iwae=self.elbo_iwae,
             normalised_elbo_vae=self.normalised_elbo_vae,
             normalised_elbo_iwae=self.normalised_elbo_iwae,
-            importance_weights=self.importance_weights,
             ess=self.ess,
-            iw_distrib=self.iw_distrib,
-            iw_resampling_idx=self.iw_resampling_idx,
             loss=self.loss,
             loss_reconstruction=loss_reconstruction,
             loss_l2=loss_l2,
         )
+        self.train_records = {}
 
         # --- recorded values ---
-
-        intersection = recorded_tensors.keys() & network_recorded_tensors.keys()
-        assert not intersection, "Key sets have non-zero intersection: {}".format(intersection)
-        recorded_tensors.update(network_recorded_tensors)
 
         intersection = recorded_tensors.keys() & self.network.eval_funcs.keys()
         assert not intersection, "Key sets have non-zero intersection: {}".format(intersection)
 
+        # --- for rendering and eval ---
+        resampled_names = 'obj_id canvas glimpse presence_prob presence presence_logit where_coords num_steps_per_sample'.split()
+        for name in resampled_names:
+            try:
+                resampled_tensor = self.resample(self.tensors[name], axis=1)
+                permutation = [1, 0] + list(range(2, len(resampled_tensor.shape)))
+                self.tensors['resampled_' + name] = tf.transpose(resampled_tensor, permutation)
+            except AttributeError:
+                pass
+
         # For running functions, during evaluation, that are not implemented in tensorflow
-        self.evaluator = Evaluator(self.network.eval_funcs, network_tensors, self)
-
-        # TODO vvv count accuracy
-        # if self.gt_presence is not None:
-        #     self.gt_num_steps = tf.reduce_sum(self.gt_presence, -1)
-
-        #     num_steps_per_sample = tf.reshape(self.num_steps_per_sample, (-1, self.batch_size, self.k_particles))
-        #     gt_num_steps = tf.expand_dims(self.gt_num_steps, -1)
-
-        #     self.num_step_accuracy_per_example = tf.to_float(tf.equal(gt_num_steps, num_steps_per_sample))
-        #     self.raw_num_step_accuracy = tf.reduce_mean(self.num_step_accuracy_per_example)
-        #     self.num_step_accuracy = self._imp_weighted_mean(self.num_step_accuracy_per_example)
-        #     tf.summary.scalar('num_step_acc', self.num_step_accuracy)
-
-
-
-        # # For rendering
-        # resampled_names = 'obj_id canvas glimpse presence_prob presence presence_logit where'.split()
-        # for name in resampled_names:
-        #     try:
-        #         setattr(self, 'resampled_' + name, self.resample(getattr(self, name), axis=1))
-        #     except AttributeError:
-        #         pass
+        self.evaluator = Evaluator(self.network.eval_funcs, self.tensors, self)
 
 
 class SQAIR_AP(object):
-    """ TODO: this whole class """
-    keys_accessed = "scale shift predicted_n_digits annotations n_annotations"
+    keys_accessed = (
+        ["resampled_" + name for name in "where_coords num_steps_per_sample".split()]
+        + "annotations n_annotations".split()
+    )
 
     def __init__(self, iou_threshold=None):
         if iou_threshold is not None:
@@ -266,48 +312,49 @@ class SQAIR_AP(object):
 
     def __call__(self, _tensors, updater):
         network = updater.network
-        w, h = np.split(_tensors['scale'], 2, axis=2)
-        x, y = np.split(_tensors['shift'], 2, axis=2)
-        predicted_n_digits = _tensors['predicted_n_digits']
+
+        predicted_n_digits = _tensors['resampled_num_steps_per_sample']
         annotations = _tensors["annotations"]
         n_annotations = _tensors["n_annotations"]
 
-        batch_size = w.shape[0]
+        w, h, x, y = np.split(_tensors['resampled_where_coords'], 4, axis=3)
 
-        transformed_x = 0.5 * (x + 1.)
-        transformed_y = 0.5 * (y + 1.)
+        transformed_x = 0.5 * (x + 1.) * network.image_width
+        transformed_y = 0.5 * (y + 1.) * network.image_height
 
         height = h * network.image_height
         width = w * network.image_width
 
-        top = network.image_height * transformed_y - height / 2
-        left = network.image_width * transformed_x - width / 2
+        top = transformed_y - height / 2
+        left = transformed_x - width / 2
 
         bottom = top + height
         right = left + width
 
+        batch_size, n_frames = w.shape[:2]
+
         ground_truth_boxes = []
         predicted_boxes = []
 
-        for idx in range(batch_size):
-            _a = [
-                [0, *rest]
-                for (valid, cls, *rest), _
-                in zip(annotations[idx], range(n_annotations[idx]))
-                if valid]
-            ground_truth_boxes.append(_a)
+        for f in range(n_frames):
+            for idx in range(batch_size):
+                _ground_truth_boxes = [
+                    [0, *rest]
+                    for (valid, cls, *rest), _
+                    in zip(annotations[idx, f], range(n_annotations[idx]))
+                    if valid > 0.5]
+                ground_truth_boxes.append(_ground_truth_boxes)
 
-            _predicted_boxes = []
+                _predicted_boxes = []
+                for j in range(int(predicted_n_digits[idx, f])):
+                    _predicted_boxes.append(
+                        [0, 1,
+                         top[idx, f, j, 0],
+                         bottom[idx, f, j, 0],
+                         left[idx, f, j, 0],
+                         right[idx, f, j, 0]])
 
-            for t in range(predicted_n_digits[idx]):
-                _predicted_boxes.append(
-                    [0, 1,
-                     top[idx, t, 0],
-                     bottom[idx, t, 0],
-                     left[idx, t, 0],
-                     right[idx, t, 0]])
-
-            predicted_boxes.append(_predicted_boxes)
+                predicted_boxes.append(_predicted_boxes)
 
         return mAP(
             predicted_boxes, ground_truth_boxes, n_classes=1,
@@ -347,46 +394,24 @@ class SQAIR(VideoNetwork):
     attr_prior_mean = None
     attr_prior_std = None
     noisy = None
+    needs_background = False
 
     def __init__(self, env, updater, scope=None, **kwargs):
-        # ap_iou_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-        # self.eval_funcs = {"AP_at_point_{}".format(int(10 * v)): SQAIR_AP(v) for v in ap_iou_values}
-        # self.eval_funcs["AP"] = SQAIR_AP(ap_iou_values)
+        ap_iou_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+        self.eval_funcs = {"AP_at_point_{}".format(int(10 * v)): SQAIR_AP(v) for v in ap_iou_values}
+        self.eval_funcs["AP"] = SQAIR_AP(ap_iou_values)
         super().__init__(env, updater, scope=scope, **kwargs)
 
     def _call(self, data, is_training):
-        self.data = data
-        inp = data["tiled_obs"]
+        inp = data["processed_image"]
 
         self._tensors = AttrDict(
             inp=inp,
+            mean_img=data["mean_img"],
             is_training=is_training,
             float_is_training=tf.to_float(is_training),
             batch_size=tf.shape(inp)[1],
         )
-
-        # if "annotations" in data:
-        #     self._tensors.update(
-        #         annotations=data["annotations"]["data"],
-        #         n_annotations=data["annotations"]["shapes"][:, 1],
-        #         n_valid_annotations=tf.to_int32(
-        #             tf.reduce_sum(
-        #                 data["annotations"]["data"][:, :, :, 0]
-        #                 * tf.to_float(data["annotations"]["mask"][:, :, :, 0]),
-        #                 axis=2
-        #             )
-        #         )
-        #     )
-
-        # if "label" in data:
-        #     self._tensors.update(
-        #         targets=data["label"],
-        #     )
-
-        # if "background" in data:
-        #     self._tensors.update(
-        #         background=data["background"],
-        #     )
 
         self.record_tensors(
             batch_size=tf.to_float(self.batch_size),
@@ -407,7 +432,7 @@ class SQAIR(VideoNetwork):
         )
 
     def build_representation(self):
-        _, _, *img_size = self.data['tiled_obs'].shape.as_list()
+        _, _, *img_size = self.inp.shape.as_list()
 
         layers = [self.n_hidden] * self.n_layers
 
@@ -420,6 +445,8 @@ class SQAIR(VideoNetwork):
         transform_estimator = partial(StochasticTransformParam, layers, self.transform_var_bias)
         steps_predictor = partial(StepsPredictor, steps_pred_hidden, self.disc_step_bias)
 
+        # This is the input image encoder. Currently it is an MLP, which results in a huge number of parameters
+        # because we are using color images. Probably want to use a convolutional network instead.
         input_encoder = partial(Encoder, layers)
 
         with tf.variable_scope('discovery'):
@@ -455,14 +482,11 @@ class SQAIR(VideoNetwork):
             propagate = Propagate(ssm, propagation_prior)
 
         with tf.variable_scope('decoder'):
-            mean_img = self.updater.compute_validation_pixelwise_mean()
-
             glimpse_decoder = partial(Decoder, layers, output_scale=self.output_scale)
             decoder = AIRDecoder(img_size, self.glimpse_size, glimpse_decoder,
                                  batch_dims=2,
-                                 mean_img=mean_img,
-                                 output_std=self.output_std,
-                                 )
+                                 mean_img=self._tensors["mean_img"],
+                                 output_std=self.output_std,)
 
         with tf.variable_scope('sequence'):
             time_cell = self.time_rnn_class(self.n_hidden)
@@ -471,6 +495,143 @@ class SQAIR(VideoNetwork):
                 self.n_steps_per_image, self.glimpse_size, discover, propagate,
                 time_cell, decoder, sample_from_prior=self.sample_from_prior)
 
-        outputs = sequence_apdr(self.data['tiled_obs'])
+        outputs = sequence_apdr(self.inp)
 
         self._tensors.update(outputs)
+
+
+class SQAIR_RenderHook(RenderHook):
+    N = 4
+    linewidth = 2
+    on_color = np.array(to_rgb("xkcd:azure"))
+    off_color = np.array(to_rgb("xkcd:red"))
+    gt_color = "xkcd:yellow"
+    _BBOX_COLORS = 'rgbymcw'
+    fig_scale = 1.5
+
+    def build_fetches(self, updater):
+        resampled_names = 'obj_id canvas glimpse presence_prob presence presence_logit where_coords num_steps_per_sample'.split()
+        fetches = (
+            ["resampled_" + name for name in resampled_names]
+        )
+
+        if "n_annotations" in updater.tensors:
+            fetches.extend(" annotations n_annotations".split())
+
+        fetches.append("inp")
+
+        return fetches
+
+    def __call__(self, updater):
+        fetched = self._fetch(updater)
+        fetched = Config(fetched)
+        self._prepare_fetched(updater, fetched)
+        o = AttrDict(**fetched)
+
+        N, T, image_height, image_width, _ = o.inp.shape
+
+        fig_width = 2 * N
+        fig_height = T
+        figsize = self.fig_scale * np.asarray((fig_width, fig_height))
+        fig, axes = plt.subplots(fig_height, fig_width, figsize=figsize)
+        axes = axes.reshape((fig_height, fig_width))
+
+        unique_ids = [int(i) for i in np.unique(o.obj_id)]
+        if unique_ids[0] < 0:
+            unique_ids = unique_ids[1:]
+
+        color_by_id = {i: c for i, c in zip(unique_ids, itertools.cycle(self._BBOX_COLORS))}
+        color_by_id[-1] = 'k'
+
+        cmap = self._cmap(o.inp)
+        for t, ax in enumerate(axes):
+            for n in range(N):
+                pres_time = o.presence[n, t, :]
+                obj_id_time = o.obj_id[n, t, :]
+                ax[2 * n].imshow(o.inp[n, t], cmap=cmap, vmin=0., vmax=1.)
+
+                n_obj = str(int(np.round(pres_time.sum())))
+                id_string = ('{}{}'.format(color_by_id[int(i)], i) for i in o.obj_id[n, t] if i > -1)
+                id_string = ', '.join(id_string)
+                title = '{}: {}'.format(n_obj, id_string)
+
+                ax[2 * n + 1].set_title(title, fontsize=6 * self.fig_scale)
+                ax[2 * n + 1].imshow(o.canvas[n, t], cmap=cmap, vmin=0., vmax=1.)
+                for i, (p, o_id) in enumerate(zip(pres_time, obj_id_time)):
+                    c = color_by_id[int(o_id)]
+                    if p > .5:
+                        r = patches.Rectangle(
+                            (o.left[n, t, i], o.top[n, t, i]), o.width[n, t, i], o.height[n, t, i],
+                            linewidth=self.linewidth, edgecolor=c, facecolor='none')
+                        ax[2 * n + 1].add_patch(r)
+
+        for n in range(N):
+            axes[0, 2 * n].set_ylabel('gt #{:d}'.format(n))
+            axes[0, 2 * n + 1].set_ylabel('rec #{:d}'.format(n))
+
+        for ax in axes.flatten():
+            # ax.grid(False)
+            # ax.set_xticks([])
+            # ax.set_yticks([])
+            ax.set_axis_off()
+
+        self.savefig('patches', fig, updater)
+
+    def _cmap(self, obs, with_time=True):
+        ndims = len(obs.shape)
+        cmap = None
+        if ndims == (3 + with_time) or (ndims == (4 + with_time) and obs.shape[-1] == 1):
+            cmap = 'gray'
+        return cmap
+
+    @staticmethod
+    def normalize_images(images):
+        mx = images.reshape(*images.shape[:-3], -1).max(axis=-1)
+        return images / mx[..., None, None, None]
+
+    def _prepare_fetched(self, updater, fetched):
+        inp = fetched['inp']
+        output = fetched['resampled_canvas']
+        prediction = fetched.get("prediction", None)
+        targets = fetched.get("targets", None)
+
+        N, T, image_height, image_width, _ = inp.shape
+
+        w, h, x, y = np.split(fetched['resampled_where_coords'], 4, axis=3)
+
+        network = updater.network
+
+        transformed_x = 0.5 * (x + 1.) * network.image_width
+        transformed_y = 0.5 * (y + 1.) * network.image_height
+
+        height = h * network.image_height
+        width = w * network.image_width
+
+        top = transformed_y - height / 2
+        left = transformed_x - width / 2
+
+        n_annotations = fetched.get("n_annotations", np.zeros(N, dtype='i'))
+        annotations = fetched.get("annotations", None)
+
+        diff = self.normalize_images(np.abs(inp - output).mean(axis=-1, keepdims=True))
+        squared_diff = self.normalize_images(((inp - output)**2).mean(axis=-1, keepdims=True))
+
+        fetched.update(
+            prediction=prediction,
+            targets=targets,
+            top=top,
+            left=left,
+            height=height,
+            width=width,
+            n_annotations=n_annotations,
+            annotations=annotations,
+            diff=diff,
+            squared_diff=squared_diff,
+        )
+
+        new = {}
+        for k, v in fetched.items():
+            if k.startswith('resampled_'):
+                n_chars = len('resampled_')
+                new[k[n_chars:]] = v
+        fetched.update(new)

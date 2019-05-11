@@ -111,7 +111,6 @@ class VideoNetwork(TensorRecorder):
 
     def build_background(self):
         if self.needs_background:
-
             if cfg.background_cfg.mode == "colour":
                 rgb = np.array(to_rgb(cfg.background_cfg.colour))[None, None, None, :]
                 background = rgb * tf.ones_like(self.inp)

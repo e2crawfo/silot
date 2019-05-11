@@ -14,7 +14,7 @@ from auto_yolo.models.core import Updater
 
 from spair_video.core import SimpleVideoVAE, SimpleVAE_RenderHook, BackgroundExtractor
 from spair_video.tracking_by_animation import TrackingByAnimation, TbaBackbone, TBA_RenderHook
-from spair_video.seq_air import SQAIR, SQAIRUpdater
+from spair_video.seq_air import SQAIR, SQAIRUpdater, SQAIR_RenderHook
 from spair_video.sspair import SequentialSpair, SequentialSpair_RenderHook
 from spair_video.interpretable_sspair import InterpretableSequentialSpair, ISSPAIR_RenderHook
 
@@ -262,6 +262,7 @@ alg_configs = dict(
     sqair=Config(
         get_updater=SQAIRUpdater,
         build_network=SQAIR,
+        render_hook=SQAIR_RenderHook(),
         debug=False,
 
         batch_size=32,
@@ -273,27 +274,34 @@ alg_configs = dict(
         prop_prior_step_bias=10.,
         prop_prior_type='rnn',
         masked_glimpse=True,
-        k_particles=5,
+        k_particles=2,
         n_steps_per_image=3,
         sample_from_prior=False,
         rec_where_prior=True,
         rnn_class=snt.VanillaRNN,
         time_rnn_class=snt.GRU,
         prior_rnn_class=snt.GRU,
-        optimizer_spec="rmsprop,momenum=0.9",
+        optimizer_spec="rmsprop,momentum=0.9",
         learning_rate=1e-5,
         schedule="4,6,10",
         l2_schedule=0.0,
-        # TODO learning rate decay by 1./3 each segment...elements of each schedule give relative lengths of each segment.
+        # TODO learning rate decay by 1./3 each segment...elements of schedule give relative lengths of each segment.
         n_layers=2,
         n_hidden=8*32,
         n_what=50,
         glimpse_size=(20, 20),
         transform_var_bias=-3.,
         output_scale=0.25,
+        # output_std=1.,
         output_std=0.3,
         scale_prior=(-2., -2.),
         max_steps=int(2e6),
+        variable_scope_depth=None,
+        n_val=992,  # has to be a multiple of the batch size
+        seq_len=3,  # start at this number of frames, increase by one every stage_steps-many training steps
+        stage_steps=int(1e5),
+        image_shape=(28, 28),
+        tile_shape=(28, 28),
     ),
     sspair=Config(
         build_network=SequentialSpair,
