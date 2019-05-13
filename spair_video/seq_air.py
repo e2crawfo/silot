@@ -16,9 +16,9 @@ from dps.utils.tf import (
     build_gradient_train_op, ScopedFunction, build_scheduled_value, FIXED_COLLECTION, tf_shape, RenderHook)
 from dps.updater import DataManager
 
-from auto_yolo.models.core import mAP, Updater as _Updater, Evaluator
+from auto_yolo.models.core import AP, Updater as _Updater, Evaluator
 
-from spair_video.core import VideoNetwork
+from spair_video.core import VideoNetwork, MOTMetrics
 
 from sqair.sqair_modules import Propagate, Discover
 from sqair.core import DiscoveryCore, PropagationCore
@@ -296,69 +296,61 @@ class SQAIRUpdater(_Updater):
         self.evaluator = Evaluator(self.network.eval_funcs, self.tensors, self)
 
 
-class SQAIR_AP(object):
+class SQAIR_AP(AP):
     keys_accessed = (
-        ["resampled_" + name for name in "where_coords num_steps_per_sample".split()]
+        ["resampled_" + name for name in "where_coords presence_prob num_steps_per_sample".split()]
         + "annotations n_annotations".split()
     )
 
-    def __init__(self, iou_threshold=None):
-        if iou_threshold is not None:
-            try:
-                iou_threshold = list(iou_threshold)
-            except (TypeError, ValueError):
-                iou_threshold = [float(iou_threshold)]
-        self.iou_threshold = iou_threshold
+    def _process_data(self, tensors, updater):
+        obj = tensors["resampled_presence_prob"]
+        predicted_n_digits = tensors['resampled_num_steps_per_sample']
+        w, h, x, y = np.split(tensors['resampled_where_coords'], 4, axis=3)
 
-    def __call__(self, _tensors, updater):
-        network = updater.network
+        transformed_x = 0.5 * (x + 1.) * updater.network.image_width
+        transformed_y = 0.5 * (y + 1.) * updater.network.image_height
 
-        predicted_n_digits = _tensors['resampled_num_steps_per_sample']
-        annotations = _tensors["annotations"]
-        n_annotations = _tensors["n_annotations"]
-
-        w, h, x, y = np.split(_tensors['resampled_where_coords'], 4, axis=3)
-
-        transformed_x = 0.5 * (x + 1.) * network.image_width
-        transformed_y = 0.5 * (y + 1.) * network.image_height
-
-        height = h * network.image_height
-        width = w * network.image_width
+        height = h * updater.network.image_height
+        width = w * updater.network.image_width
 
         top = transformed_y - height / 2
         left = transformed_x - width / 2
 
-        bottom = top + height
-        right = left + width
+        annotations = tensors["annotations"]
+        n_annotations = tensors["n_annotations"]
 
-        batch_size, n_frames = w.shape[:2]
+        return obj, predicted_n_digits, top, left, height, width, annotations, n_annotations
 
-        ground_truth_boxes = []
-        predicted_boxes = []
 
-        for f in range(n_frames):
-            for idx in range(batch_size):
-                _ground_truth_boxes = [
-                    [0, *rest]
-                    for (valid, cls, *rest), _
-                    in zip(annotations[idx, f], range(n_annotations[idx]))
-                    if valid > 0.5]
-                ground_truth_boxes.append(_ground_truth_boxes)
+class SQAIR_MOTMetrics(MOTMetrics):
+    keys_accessed = (
+        ["resampled_" + name for name in "obj_id where_coords num_steps_per_sample".split()]
+        + "annotations n_annotations".split()
+    )
 
-                _predicted_boxes = []
-                for j in range(int(predicted_n_digits[idx, f])):
-                    _predicted_boxes.append(
-                        [0, 1,
-                         top[idx, f, j, 0],
-                         bottom[idx, f, j, 0],
-                         left[idx, f, j, 0],
-                         right[idx, f, j, 0]])
+    def _process_data(self, tensors, updater):
+        pred_n_objects = tensors['resampled_num_steps_per_sample']
+        obj_id = tensors['resampled_obj_id']
 
-                predicted_boxes.append(_predicted_boxes)
+        shape = obj_id.shape
+        obj = (obj_id != -1).astype('i')
 
-        return mAP(
-            predicted_boxes, ground_truth_boxes, n_classes=1,
-            iou_threshold=self.iou_threshold)
+        w, h, x, y = np.split(tensors['resampled_where_coords'], 4, axis=3)
+        w = w.reshape(shape)
+        h = h.reshape(shape)
+        x = x.reshape(shape)
+        y = y.reshape(shape)
+
+        transformed_x = 0.5 * (x + 1.) * updater.network.image_width
+        transformed_y = 0.5 * (y + 1.) * updater.network.image_height
+
+        height = h * updater.network.image_height
+        width = w * updater.network.image_width
+
+        top = transformed_y - height / 2
+        left = transformed_x - width / 2
+
+        return obj, pred_n_objects, obj_id, top, left, height, width
 
 
 class SQAIR(VideoNetwork):
@@ -389,6 +381,8 @@ class SQAIR(VideoNetwork):
     rec_where_prior = Param()
 
     sample_from_prior = Param()
+    training_wheels = Param()
+    mot_eval = Param()
 
     # Don't think we need these for this network
     attr_prior_mean = None
@@ -400,6 +394,11 @@ class SQAIR(VideoNetwork):
         ap_iou_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
         self.eval_funcs = {"AP_at_point_{}".format(int(10 * v)): SQAIR_AP(v) for v in ap_iou_values}
         self.eval_funcs["AP"] = SQAIR_AP(ap_iou_values)
+
+        if self.mot_eval:
+            self.eval_funcs["MOT"] = SQAIR_MOTMetrics()
+
+        self.training_wheels = build_scheduled_value(self.training_wheels, "training_wheels")
         super().__init__(env, updater, scope=scope, **kwargs)
 
     def _call(self, data, is_training):
@@ -442,8 +441,10 @@ class SQAIR(VideoNetwork):
 
         steps_pred_hidden = self.n_hidden / 2
 
+        training_wheels = self.training_wheels
+
         transform_estimator = partial(StochasticTransformParam, layers, self.transform_var_bias)
-        steps_predictor = partial(StepsPredictor, steps_pred_hidden, self.disc_step_bias)
+        steps_predictor = partial(StepsPredictor, steps_pred_hidden, self.disc_step_bias, training_wheels=training_wheels)
 
         # This is the input image encoder. Currently it is an MLP, which results in a huge number of parameters
         # because we are using color images. Probably want to use a convolutional network instead.
@@ -452,7 +453,7 @@ class SQAIR(VideoNetwork):
         with tf.variable_scope('discovery'):
             discover_cell = DiscoveryCore(img_size, self.glimpse_size, self.n_what, self.rnn_class(self.n_hidden),
                                           input_encoder, glimpse_encoder, transform_estimator, steps_predictor,
-                                          debug=self.debug)
+                                          debug=self.debug, training_wheels=training_wheels)
 
             discover = Discover(self.n_steps_per_image, discover_cell,
                                 step_success_prob=self.step_success_prob,
@@ -473,7 +474,7 @@ class SQAIR(VideoNetwork):
             propagation_cell = PropagationCore(img_size, self.glimpse_size, self.n_what, propagate_rnn_cell,
                                                input_encoder, glimpse_encoder, transform_estimator,
                                                steps_predictor, temporal_rnn_cell,
-                                               debug=self.debug)
+                                               debug=self.debug, training_wheels=training_wheels)
             ssm = SequentialSSM(propagation_cell)
 
             prior_rnn = self.prior_rnn_class(self.n_hidden)
@@ -534,6 +535,7 @@ class SQAIR_RenderHook(RenderHook):
         fig_height = T
         figsize = self.fig_scale * np.asarray((fig_width, fig_height))
         fig, axes = plt.subplots(fig_height, fig_width, figsize=figsize)
+        fig.suptitle("n_updates={}".format(updater.n_updates), fontsize=20, fontweight='bold')
         axes = axes.reshape((fig_height, fig_width))
 
         unique_ids = [int(i) for i in np.unique(o.obj_id)]

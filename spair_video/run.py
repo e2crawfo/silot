@@ -293,15 +293,20 @@ alg_configs = dict(
         transform_var_bias=-3.,
         output_scale=0.25,
         # output_std=1.,
-        output_std=0.3,
+        output_std=0.9,
+        # output_std=0.3,
         scale_prior=(-2., -2.),
         max_steps=int(2e6),
         variable_scope_depth=None,
         n_val=992,  # has to be a multiple of the batch size
         seq_len=3,  # start at this number of frames, increase by one every stage_steps-many training steps
         stage_steps=int(1e5),
-        image_shape=(28, 28),
-        tile_shape=(28, 28),
+        patch_shape=(21, 21),
+        min_digits=1,
+        max_digits=2,
+        training_wheels="Exp(1.0, 0.0, decay_rate=0.0, decay_steps=500, staircase=True)",
+        # training_wheels=0.0,
+        mot_eval=False,
     ),
     sspair=Config(
         build_network=SequentialSpair,
@@ -427,6 +432,7 @@ alg_configs["test_sspair"] = alg_configs["sspair"].copy(
 )
 
 alg_configs["isspair"] = alg_configs["sspair"].copy(
+    mot_eval=True,
     render_hook=ISSPAIR_RenderHook(),
     build_discovery_feature_fuser=lambda scope: ConvNet(
         scope=scope, layers=[
@@ -468,18 +474,18 @@ alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
 
 alg_configs["load_isspair"] = alg_configs["isspair"].copy(
     render_hook=ISSPAIR_RenderHook(),
-    load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=isspair_seed=9239644_2019_05_07_08_49_23/weights/best_of_stage_0",
+    load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=exp-isspair_2019_05_09_09_34_52_seed=893541943/weights/best_of_stage_0",
+    # load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=isspair_seed=9239644_2019_05_07_08_49_23/weights/best_of_stage_0",
     n_train=4,
     n_val=4,
     noisy=False,
     do_train=False,
-    d_yx_prior_std=0.1,
+    n_frames=4,
+    d_attr_prior_std=0.1,
+    d_yx_prior_std=0.3,
     d_hw_prior_std=0.1,
     where_t_scale=1.0,
     where_s_scale=1.0,
-    n_frames=3,
-    min_digits=1,
-    max_digits=1,
 )
 
 alg_configs["test_isspair"] = alg_configs["isspair"].copy(

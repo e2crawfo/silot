@@ -366,7 +366,7 @@ class SequentialSpair_RenderHook(RenderHook):
 
         # Plot true bounding boxes
         for k in range(n_annotations[n]):
-            valid, _, top, bottom, left, right = annotations[n, t, k]
+            valid, _, _, top, bottom, left, right = annotations[n, t, k]
 
             if not valid:
                 continue

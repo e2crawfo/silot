@@ -5,6 +5,7 @@ from matplotlib.colors import to_rgb
 from tensorflow.python.ops.rnn import dynamic_rnn
 import sonnet as snt
 from orderedattrdict import AttrDict
+import motmetrics as mm
 
 from dps import cfg
 from dps.utils import Param, animate
@@ -14,6 +15,76 @@ from dps.utils.tf import (
 )
 
 from auto_yolo.models.core import normal_vae, TensorRecorder, xent_loss
+
+
+class MOTMetrics:
+    keys_accessed = "is_new normalized_box obj annotations n_annotations"
+
+    def _process_data(self, tensors, updater):
+        obj = tensors['obj']
+
+        B, F, n_objects = shape = obj.shape[:3]
+        obj = obj.reshape(shape)
+        top, left, height, width = np.split(tensors['normalized_box'], 4, axis=-1)
+        top = top.reshape(shape) * updater.network.image_height
+        left = left.reshape(shape) * updater.network.image_width
+        height = height.reshape(shape) * updater.network.image_height
+        width = width.reshape(shape) * updater.network.image_height
+
+        is_new = tensors['is_new']
+        pred_ids = np.zeros((B, F), dtype=np.object)
+
+        for b in range(B):
+            next_id = 0
+            ids = [-1] * n_objects
+            for f in range(F):
+                _pred_ids = []
+                for i in range(n_objects):
+                    if obj[b, f, i, 0] > 0.5:
+                        if is_new[b, f, i]:
+                            ids[i] = next_id
+                            next_id += 1
+                        _pred_ids.append(ids[i])
+                pred_ids[b, f] = _pred_ids
+        pred_n_objects = n_objects * np.ones((B, F), dtype=np.int32)
+
+        return obj, pred_n_objects, pred_ids, top, left, height, width
+
+    def __call__(self, tensors, updater):
+        obj, pred_n_objects, pred_ids, top, left, height, width = self._process_data(tensors, updater)
+        annotations = tensors["annotations"]
+        batch_size, n_frames, n_objects = obj.shape[:3]
+
+        accumulators = []
+
+        for b in range(batch_size):
+            acc = mm.MOTAccumulator(auto_id=True)
+
+            for f in range(n_frames):
+                gt_ids = [int(_id) for valid, _, _id, *_ in annotations[b, f] if float(valid) > 0.5]
+                gt_boxes = [
+                    (top, left, bottom-top, right-left)
+                    for valid, _, _, top, bottom, left, right in annotations[b, f]
+                    if float(valid) > 0.5]
+
+                _pred_ids = [int(j) for j in pred_ids[b, f] if j >= 0]
+                pred_boxes = []
+
+                for i in range(int(pred_n_objects[b, f])):
+                    if obj[b, f, i] > 0.5:
+                        pred_boxes.append([top[b, f, i], left[b, f, i], height[b, f, i], width[b, f, i]])
+
+                distances = mm.distances.iou_matrix(gt_boxes, pred_boxes)
+                acc.update(gt_ids, _pred_ids, distances)
+            accumulators.append(acc)
+
+        mh = mm.metrics.create()
+        summary = mh.compute_many(
+            accumulators,
+            names=[str(i) for i in range(len(accumulators))],
+            generate_overall=True
+        )
+        return dict(summary.loc['OVERALL'])
 
 
 class VideoNetwork(TensorRecorder):

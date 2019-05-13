@@ -21,7 +21,7 @@ from auto_yolo.models.core import AP, xent_loss
 from auto_yolo.models.object_layer import GridObjectLayer, ObjectRenderer
 from auto_yolo.models.networks import AttentionLayer, SpatialAttentionLayer, apply_object_wise
 
-from spair_video.core import VideoNetwork
+from spair_video.core import VideoNetwork, MOTMetrics
 from spair_video.propagation import ObjectPropagationLayer
 
 
@@ -52,6 +52,8 @@ def top_k_select_objects(propagated, discovered):
         axis=2
     )
 
+    # create an array of shape (batch_size, n_prop_objects+n_disc_objects) that
+    # has a 1 for every index that is in the top_k for that batch element
     in_top_k = tf.scatter_nd(
         scatter_indices, tf.ones((batch_size, n_prop_objects), dtype=tf.int32),
         (batch_size, n_prop_objects+n_disc_objects))
@@ -59,6 +61,7 @@ def top_k_select_objects(propagated, discovered):
     from_disc_idx = n_from_prop
 
     new_indices = []
+    is_new = []
     for i in range(n_prop_objects):
         # indices to use for gather if i is not present in top_k
         gather_indices = tf.concat([tf.range(batch_size)[:, None], from_disc_idx[:, None]], axis=1)
@@ -71,8 +74,10 @@ def top_k_select_objects(propagated, discovered):
         from_disc_idx += 1 - i_present
 
         new_indices.append(indices)
+        is_new.append(1 - i_present)
 
     top_k_indices = tf.stack(new_indices, axis=1)
+    is_new = tf.stack(is_new, axis=1)
 
     batch_indices = tf.tile(tf.range(batch_size)[:, None, None], (1, n_prop_objects, 1))
     index_array = tf.concat([batch_indices, top_k_indices[:, :, None]], axis=2)
@@ -90,9 +95,10 @@ def top_k_select_objects(propagated, discovered):
         pred_n_objects=tf.reduce_sum(selected_objects.obj, axis=(1, 2)),
         pred_n_objects_hard=tf.reduce_sum(tf.round(selected_objects.render_obj), axis=(1, 2)),
         final_weights=tf.one_hot(top_k_indices, n_prop_objects + n_disc_objects, axis=-1),
+        is_new=is_new,
     )
 
-    return (selected_objects,)
+    return selected_objects
 
 
 class InterpretableSequentialSpair(VideoNetwork):
@@ -112,6 +118,7 @@ class InterpretableSequentialSpair(VideoNetwork):
     n_hidden = Param()
     learn_prior = Param()
     discovery_dropout_prob = Param()
+    mot_eval = Param()
 
     discovery_layer = None
     discovery_feature_extractor = None
@@ -127,6 +134,8 @@ class InterpretableSequentialSpair(VideoNetwork):
                 ap_iou_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
                 eval_funcs = {"AP_at_point_{}".format(int(10 * v)): AP(v) for v in ap_iou_values}
                 eval_funcs["AP"] = AP(ap_iou_values)
+                if self.mot_eval:
+                    eval_funcs["MOT"] = MOTMetrics()
                 self._eval_funcs = eval_funcs
             else:
                 self._eval_funcs = {}
@@ -245,7 +254,7 @@ class InterpretableSequentialSpair(VideoNetwork):
                 prior_discovered_objects = self.discovery_layer(
                     self.inp[:, f], prior_discovery_features, self.is_training, is_posterior=False)
 
-                prior_selected_objects, *_ = top_k_select_objects(prior_propagated_objects, prior_discovered_objects)
+                prior_selected_objects = top_k_select_objects(prior_propagated_objects, prior_discovered_objects)
 
                 prior_render_tensors = self.object_renderer(
                     prior_selected_objects, self._tensors["background"][:, f], self.is_training)
@@ -283,7 +292,7 @@ class InterpretableSequentialSpair(VideoNetwork):
 
             # --- object selection ---
 
-            posterior_selected_objects, *_ = top_k_select_objects(
+            posterior_selected_objects = top_k_select_objects(
                 posterior_propagated_objects, posterior_discovered_objects)
 
             # --- rendering ---
@@ -940,7 +949,7 @@ class ISSPAIR_RenderHook(RenderHook):
 
                     # Plot true bounding boxes
                     for k in range(fetched.n_annotations[idx]):
-                        valid, _, top, bottom, left, right = fetched.annotations[idx, t, k]
+                        valid, _, _, top, bottom, left, right = fetched.annotations[idx, t, k]
 
                         if not valid:
                             continue
