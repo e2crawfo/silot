@@ -7,7 +7,7 @@ from dps.hyper import run_experiment
 from dps.utils import Config
 from dps.datasets.base import VisualArithmeticDataset, Environment
 from dps.datasets.shapes import RandomShapesDataset
-from dps.utils.tf import MLP, CompositeCell, RecurrentGridConvNet, ConvNet
+from dps.utils.tf import MLP, CompositeCell, RecurrentGridConvNet, GridConvNet, ConvNet, tf_shape
 from dps.config import DEFAULT_CONFIG
 
 from auto_yolo.models.core import Updater
@@ -209,6 +209,17 @@ def spair_prepare_func():
     )
 
 
+class SQAIRWrapper:
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+
+    def __call__(self, inp):
+        output = self.wrapped(inp, None, True)[0]
+        batch_size = tf_shape(output)[0]
+        n_trailing = np.prod(tf_shape(output)[1:])
+        return tf.reshape(output, (batch_size, n_trailing))
+
+
 alg_configs = dict(
     simple_vae=Config(
         build_network=SimpleVideoVAE,
@@ -258,55 +269,6 @@ alg_configs = dict(
         render_hook=TBA_RenderHook(),
         # fixed_values=dict(conf=1.),
         discrete_eval=False,
-    ),
-    sqair=Config(
-        get_updater=SQAIRUpdater,
-        build_network=SQAIR,
-        render_hook=SQAIR_RenderHook(),
-        debug=False,
-
-        batch_size=32,
-        constant_prop_prior=0.0,
-        disc_prior_type='cat',
-        step_success_prob=0.75,
-        disc_step_bias=1.,
-        prop_step_bias=5.,
-        prop_prior_step_bias=10.,
-        prop_prior_type='rnn',
-        masked_glimpse=True,
-        k_particles=2,
-        n_steps_per_image=3,
-        sample_from_prior=False,
-        rec_where_prior=True,
-        rnn_class=snt.VanillaRNN,
-        time_rnn_class=snt.GRU,
-        prior_rnn_class=snt.GRU,
-        optimizer_spec="rmsprop,momentum=0.9",
-        learning_rate=1e-5,
-        schedule="4,6,10",
-        l2_schedule=0.0,
-        # TODO learning rate decay by 1./3 each segment...elements of schedule give relative lengths of each segment.
-        n_layers=2,
-        n_hidden=8*32,
-        n_what=50,
-        glimpse_size=(20, 20),
-        transform_var_bias=-3.,
-        output_scale=0.25,
-        # output_std=1.,
-        output_std=0.9,
-        # output_std=0.3,
-        scale_prior=(-2., -2.),
-        max_steps=int(2e6),
-        variable_scope_depth=None,
-        n_val=992,  # has to be a multiple of the batch size
-        seq_len=3,  # start at this number of frames, increase by one every stage_steps-many training steps
-        stage_steps=int(1e5),
-        patch_shape=(21, 21),
-        min_digits=1,
-        max_digits=2,
-        training_wheels="Exp(1.0, 0.0, decay_rate=0.0, decay_steps=500, staircase=True)",
-        # training_wheels=0.0,
-        mot_eval=False,
     ),
     sspair=Config(
         build_network=SequentialSpair,
@@ -431,6 +393,8 @@ alg_configs["test_sspair"] = alg_configs["sspair"].copy(
     build_object_decoder=lambda scope: MLP(n_units=[64, 64], scope=scope),
 )
 
+# --- ISSPAIR ---
+
 alg_configs["isspair"] = alg_configs["sspair"].copy(
     mot_eval=True,
     render_hook=ISSPAIR_RenderHook(),
@@ -517,6 +481,88 @@ alg_configs["test_isspair"] = alg_configs["isspair"].copy(
     n_hidden=32,
     n_propagated_objects=5,
 )
+
+
+# --- SQAIR ---
+
+alg_configs['sqair'] = Config(
+    get_updater=SQAIRUpdater,
+    build_network=SQAIR,
+    render_hook=SQAIR_RenderHook(),
+    debug=False,
+    batch_size=32,
+    constant_prop_prior=0.0,
+    disc_prior_type='cat',
+    step_success_prob=0.75,
+    disc_step_bias=1.,
+    prop_step_bias=5.,
+    prop_prior_step_bias=10.,
+    prop_prior_type='rnn',
+    masked_glimpse=True,
+    k_particles=5,
+    n_steps_per_image=3,
+    sample_from_prior=False,
+    rec_where_prior=True,
+    rnn_class=snt.VanillaRNN,
+    time_rnn_class=snt.GRU,
+    prior_rnn_class=snt.GRU,
+    optimizer_spec="rmsprop,momentum=0.9",
+    build_input_encoder=None,
+    lr_schedule=1e-5,
+    max_grad_norm=None,
+    schedule="4,6,10",
+    l2_schedule=0.0,
+    # TODO learning rate decay by 1./3 each segment...elements of schedule give relative lengths of each segment.
+    n_layers=2,
+    n_hidden=8*32,
+    n_what=50,
+    glimpse_size=(20, 20),
+    transform_var_bias=-3.,
+    output_scale=0.25,
+    output_std=0.3,
+    scale_prior=(-2., -2.),
+    max_steps=int(2e6),
+    variable_scope_depth=None,
+    n_val=992,  # has to be a multiple of the batch size
+    seq_len=3,  # start at this number of frames, increase by one every stage_steps-many training steps
+    stage_steps=int(1e5),
+    patch_shape=(21, 21),
+    image_shape=(50, 50),
+    tile_shape=(50, 50),
+    min_digits=0,
+    max_digits=2,
+    training_wheels=0.0,
+    mot_eval=False,
+    colours=None,
+)
+
+alg_configs['exp_sqair'] = alg_configs['sqair'].copy(
+    image_shape=(48, 48),
+    tile_shape=(48, 48),
+    disc_step_bias=5.,
+    # masked_glimpse=False,
+    # disc_step_bias=10.,
+    # disc_prior_type='geom',
+    # step_success_prob=0.9999,
+    # transform_var_bias=0.,
+    # output_scale=5.0,
+    # output_std=0.9,
+    # training_wheels="Exp(1.0, 0.0, decay_rate=0.0, decay_steps=100, staircase=True)",
+    # scale_prior=(-3.5, -3.5),
+    # patch_shape=(14, 14),
+    # max_grad_norm=10.0,
+    # build_input_encoder=lambda: SQAIRWrapper(GridConvNet(
+    #     layers=[
+    #         dict(filters=64, kernel_size=4, strides=3),
+    #         dict(filters=64, kernel_size=4, strides=2),
+    #         dict(filters=64, kernel_size=4, strides=2),
+    #         dict(filters=64, kernel_size=1, strides=1),
+    #         dict(filters=64, kernel_size=1, strides=1),
+    #         dict(filters=64, kernel_size=1, strides=1),
+    #     ],
+    # )),
+)
+
 
 for k, v in env_configs.items():
     v['env_name'] = k

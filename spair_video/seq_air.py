@@ -3,6 +3,8 @@ import numpy as np
 from functools import partial
 from orderedattrdict import AttrDict
 import itertools
+import shutil
+import os
 
 import matplotlib.pyplot as plt
 from matplotlib import animation
@@ -221,29 +223,48 @@ class SQAIRUpdater(_Updater):
 
         # --- losses ---
 
-        if 'discrete_log_prob' in self.tensors:
-            log_probs = tf.reduce_sum(self.tensors.discrete_log_prob, 0)
-            target = targets.vimco(self.log_weights, log_probs, self.elbo_iwae_per_example)
-        else:
-            target = -self.elbo_iwae
+        log_probs = tf.reduce_sum(self.tensors.discrete_log_prob, 0)
+        target = targets.vimco(self.log_weights, log_probs, self.elbo_iwae_per_example)
 
-        loss_reconstruction = target / tf.to_float(effective_n_frames)
+        target /= tf.to_float(effective_n_frames)
         loss_l2 = targets.l2_reg(self.l2_schedule)
-        self.loss = loss_reconstruction + loss_l2
+        target += loss_l2
 
         # --- train op ---
 
+        tvars = tf.trainable_variables()
+        pure_gradients = tf.gradients(target, tvars)
+
+        clipped_gradients = pure_gradients
+        if self.max_grad_norm is not None and self.max_grad_norm > 0.0:
+            clipped_gradients, _ = tf.clip_by_global_norm(pure_gradients, self.max_grad_norm)
+
+        grads_and_vars = list(zip(clipped_gradients, tvars))
+
+        lr = self.lr_schedule
+        valid_lr = tf.Assert(
+            tf.logical_and(tf.less(lr, 1.0), tf.less(0.0, lr)),
+            [lr], name="valid_learning_rate")
+
         opt = tf.train.RMSPropOptimizer(self.lr_schedule, momentum=.9)
 
-        gvs = opt.compute_gradients(target)
+        with tf.control_dependencies([valid_lr]):
+            self.train_op = opt.apply_gradients(grads_and_vars, global_step=None)
 
-        assert len(gvs) == len(tf.trainable_variables())
-        for g, v in gvs:
-            assert g is not None, 'Gradient for variable {} is None'.format(v)
+        recorded_tensors.update(
+            grad_norm_pure=tf.global_norm(pure_gradients),
+            grad_norm_processed=tf.global_norm(clipped_gradients),
+            grad_lr_norm=lr * tf.global_norm(clipped_gradients),
+        )
 
-        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-        with tf.control_dependencies(update_ops):
-            self.train_op = opt.apply_gradients(gvs)
+        # gvs = opt.compute_gradients(target)
+        # assert len(gvs) == len(tf.trainable_variables())
+        # for g, v in gvs:
+        #     assert g is not None, 'Gradient for variable {} is None'.format(v)
+
+        # update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        # with tf.control_dependencies(update_ops):
+        #     self.train_op = opt.apply_gradients(gvs)
 
         # --- record ---
 
@@ -271,8 +292,8 @@ class SQAIRUpdater(_Updater):
             normalised_elbo_vae=self.normalised_elbo_vae,
             normalised_elbo_iwae=self.normalised_elbo_iwae,
             ess=self.ess,
-            loss=self.loss,
-            loss_reconstruction=loss_reconstruction,
+            loss=target,
+            target=target,
             loss_l2=loss_l2,
         )
         self.train_records = {}
@@ -448,7 +469,10 @@ class SQAIR(VideoNetwork):
 
         # This is the input image encoder. Currently it is an MLP, which results in a huge number of parameters
         # because we are using color images. Probably want to use a convolutional network instead.
-        input_encoder = partial(Encoder, layers)
+        if cfg.build_input_encoder is None:
+            input_encoder = partial(Encoder, layers)
+        else:
+            input_encoder = cfg.build_input_encoder
 
         with tf.variable_scope('discovery'):
             discover_cell = DiscoveryCore(img_size, self.glimpse_size, self.n_what, self.rnn_class(self.n_hidden),
@@ -502,7 +526,7 @@ class SQAIR(VideoNetwork):
 
 
 class SQAIR_RenderHook(RenderHook):
-    N = 4
+    N = 16
     linewidth = 2
     on_color = np.array(to_rgb("xkcd:azure"))
     off_color = np.array(to_rgb("xkcd:red"))
@@ -531,6 +555,8 @@ class SQAIR_RenderHook(RenderHook):
 
         N, T, image_height, image_width, _ = o.inp.shape
 
+        # --- static ---
+
         fig_width = 2 * N
         fig_height = T
         figsize = self.fig_scale * np.asarray((fig_width, fig_height))
@@ -550,7 +576,7 @@ class SQAIR_RenderHook(RenderHook):
             for n in range(N):
                 pres_time = o.presence[n, t, :]
                 obj_id_time = o.obj_id[n, t, :]
-                ax[2 * n].imshow(o.inp[n, t], cmap=cmap, vmin=0., vmax=1.)
+                self.imshow(ax[2 * n], o.inp[n, t], cmap=cmap)
 
                 n_obj = str(int(np.round(pres_time.sum())))
                 id_string = ('{}{}'.format(color_by_id[int(i)], i) for i in o.obj_id[n, t] if i > -1)
@@ -558,7 +584,7 @@ class SQAIR_RenderHook(RenderHook):
                 title = '{}: {}'.format(n_obj, id_string)
 
                 ax[2 * n + 1].set_title(title, fontsize=6 * self.fig_scale)
-                ax[2 * n + 1].imshow(o.canvas[n, t], cmap=cmap, vmin=0., vmax=1.)
+                self.imshow(ax[2 * n + 1], o.canvas[n, t], cmap=cmap)
                 for i, (p, o_id) in enumerate(zip(pres_time, obj_id_time)):
                     c = color_by_id[int(o_id)]
                     if p > .5:
@@ -577,7 +603,70 @@ class SQAIR_RenderHook(RenderHook):
             # ax.set_yticks([])
             ax.set_axis_off()
 
-        self.savefig('patches', fig, updater)
+        self.savefig('static', fig, updater)
+
+        # --- moving ---
+
+        fig_width = 2 * N
+        n_objects = o.obj_id.shape[2]
+        fig_height = n_objects + 2
+        figsize = self.fig_scale * np.asarray((fig_width, fig_height))
+        fig, axes = plt.subplots(fig_height, fig_width, figsize=figsize)
+        title_text = fig.suptitle('', fontsize=10)
+        axes = axes.reshape((fig_height, fig_width))
+
+        def func(t):
+            title_text.set_text("t={}, n_updates={}".format(t, updater.n_updates))
+
+            for i in range(N):
+                self.imshow(axes[0, 2*i], o.inp[i, t], cmap=cmap, vmin=0, vmax=1)
+                self.imshow(axes[1, 2*i], o.canvas[i, t], cmap=cmap, vmin=0, vmax=1)
+
+                for j in range(n_objects):
+                    if o.presence[i, t, j] > .5:
+                        c = color_by_id[int(o.obj_id[i, t, j])]
+                        r = patches.Rectangle(
+                            (o.left[i, t, j], o.top[i, t, j]), o.width[i, t, j], o.height[i, t, j],
+                            linewidth=self.linewidth, edgecolor=c, facecolor='none')
+                        axes[1, 2*i].add_patch(r)
+
+                    ax = axes[2+j, 2*i]
+
+                    self.imshow(ax, o.presence[i, t, j] * o.glimpse[i, t, j], cmap=cmap)
+                    title = '{:d} with p({:d}) = {:.02f}, id = {}'.format(
+                        int(o.presence[i, t, j]), i + 1, o.presence_prob[i, t, j], o.obj_id[i, t, j])
+                    ax.set_title(title, fontsize=4 * self.fig_scale)
+
+                    if o.presence[i, t, j] > .5:
+                        c = color_by_id[int(o.obj_id[i, t, j])]
+                        for spine in 'bottom top left right'.split():
+                            ax.spines[spine].set_color(c)
+                            ax.spines[spine].set_linewidth(2.)
+
+            for ax in axes.flatten():
+                ax.xaxis.set_ticks([])
+                ax.yaxis.set_ticks([])
+
+            axes[0, 0].set_ylabel('ground-truth')
+            axes[1, 0].set_ylabel('reconstruction')
+
+            for j in range(n_objects):
+                axes[j+2, 0].set_ylabel('glimpse #{}'.format(j + 1))
+
+        plt.subplots_adjust(left=0.02, right=.98, top=.95, bottom=0.02, wspace=0.1, hspace=0.15)
+
+        anim = animation.FuncAnimation(fig, func, frames=T, interval=500)
+
+        path = self.path_for('moving', updater, ext="mp4")
+        anim.save(path, writer='ffmpeg', codec='hevc', extra_args=['-preset', 'ultrafast'])
+
+        plt.close(fig)
+
+        shutil.copyfile(
+            path,
+            os.path.join(
+                os.path.dirname(path),
+                'latest_stage{:0>4}.mp4'.format(updater.stage_idx)))
 
     def _cmap(self, obs, with_time=True):
         ndims = len(obs.shape)

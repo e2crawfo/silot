@@ -627,13 +627,6 @@ class ISSPAIR_RenderHook(RenderHook):
     def _plot_patches(self, updater, fetched):
         # Create a plot showing what each object is generating
 
-        def remove_rects(ax):
-            for obj in ax.findobj(match=plt.Rectangle):
-                try:
-                    obj.remove()
-                except NotImplementedError:
-                    pass
-
         def flt(main=None, **floats):
             if main is not None:
                 s = main + ": "
@@ -737,7 +730,6 @@ class ISSPAIR_RenderHook(RenderHook):
 
                 ax_inp = bottom_axes[0]
                 self.imshow(ax_inp, fetched.inp[idx, t])
-                remove_rects(ax_inp)
                 if t == 0:
                     ax_inp.set_title('input')
 
@@ -752,7 +744,6 @@ class ISSPAIR_RenderHook(RenderHook):
                     bg_y, bg_x, bg_h, bg_w = fetched.bg_y, fetched.bg_x, fetched.bg_h, fetched.bg_w
 
                     self.imshow(ax, fetched.bg_raw[idx])
-                    remove_rects(ax)
                     if t == 0:
                         title = flt('bg_raw', y=bg_y[idx, t, 0], x=bg_x[idx, t, 0], h=bg_h[idx, t, 0], w=bg_w[idx, t, 0])
                         ax.set_title(title)
@@ -918,13 +909,11 @@ class ISSPAIR_RenderHook(RenderHook):
                     for short_name, long_name in names:
                         ax_all_bb = other_axes[axis_idx]
                         self.imshow(ax_all_bb, _fetched.render.output[idx, t])
-                        remove_rects(ax_all_bb)
                         if t == 0:
                             ax_all_bb.set_title('{} all bb'.format(long_name))
 
                         ax_on_bb = other_axes[axis_idx+1]
                         self.imshow(ax_on_bb, _fetched.render.output[idx, t])
-                        remove_rects(ax_on_bb)
                         if t == 0:
                             ax_on_bb.set_title('{} on bb'.format(long_name))
 
