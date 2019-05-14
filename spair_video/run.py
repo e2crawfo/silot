@@ -396,7 +396,7 @@ alg_configs["test_sspair"] = alg_configs["sspair"].copy(
 # --- ISSPAIR ---
 
 alg_configs["isspair"] = alg_configs["sspair"].copy(
-    mot_eval=True,
+    mot_eval=False,
     render_hook=ISSPAIR_RenderHook(),
     build_discovery_feature_fuser=lambda scope: ConvNet(
         scope=scope, layers=[
@@ -426,6 +426,8 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     learn_prior=False,
     where_t_scale=0.2,
     where_s_scale=0.2,
+    stage_steps=None,
+    initial_n_frames=2,
 )
 
 alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
@@ -434,6 +436,7 @@ alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
     d_hw_prior_std=0.1,
     where_t_scale=1.0,
     where_s_scale=1.0,
+    stage_steps=500,
 )
 
 alg_configs["load_isspair"] = alg_configs["isspair"].copy(
@@ -534,12 +537,29 @@ alg_configs['sqair'] = Config(
     training_wheels=0.0,
     mot_eval=False,
     colours=None,
+    fixed_presence=False,
 )
 
 alg_configs['exp_sqair'] = alg_configs['sqair'].copy(
     image_shape=(48, 48),
     tile_shape=(48, 48),
     disc_step_bias=5.,
+    disc_prior_type='special',
+    min_digits=9,
+    max_digits=9,
+    n_steps_per_image=9,
+    # min_digits=9,
+    # max_digits=9,
+    # n_steps_per_image=9,
+    patch_shape=(14, 14),
+    fixed_presence=True,
+
+    # patch_shape=(14, 14),
+    # max_digits=5,
+    # n_steps_per_image=5,
+
+
+
     # masked_glimpse=False,
     # disc_step_bias=10.,
     # disc_prior_type='geom',

@@ -40,7 +40,7 @@ class MOTMetrics:
             for f in range(F):
                 _pred_ids = []
                 for i in range(n_objects):
-                    if obj[b, f, i, 0] > 0.5:
+                    if obj[b, f, i] > 0.5:
                         if is_new[b, f, i]:
                             ids[i] = next_id
                             next_id += 1
@@ -91,6 +91,8 @@ class VideoNetwork(TensorRecorder):
     attr_prior_mean = Param()
     attr_prior_std = Param()
     noisy = Param()
+    stage_steps = Param()
+    initial_n_frames = Param()
 
     needs_background = True
     background_encoder = None
@@ -162,9 +164,23 @@ class VideoNetwork(TensorRecorder):
                 background=data["background"],
             )
 
+        if self.stage_steps is None:
+            self.current_stage = tf.constant(0, tf.float32)
+            self.dynamic_n_frames = tf_shape(inp)[1]
+        else:
+            self.current_stage = tf.cast(tf.train.get_or_create_global_step(), tf.int32) // self.stage_steps
+            self.dynamic_n_frames = tf.minimum(self.initial_n_frames + self.current_stage, tf_shape(inp)[1])
+
+        self._tensors.inp = self._tensors.inp[:, :self.dynamic_n_frames]
+        self._tensors.annotations = self._tensors.annotations[:, :self.dynamic_n_frames]
+        # self._tensors.n_annotations = self._tensors.n_annotations[:, :self.dynamic_n_frames]
+        self._tensors.n_valid_annotations = self._tensors.n_valid_annotations[:, :self.dynamic_n_frames]
+
         self.record_tensors(
             batch_size=tf.to_float(self.batch_size),
-            float_is_training=self.float_is_training
+            float_is_training=self.float_is_training,
+            current_stage=self.current_stage,
+            dynamic_n_frames=self.dynamic_n_frames,
         )
 
         self.losses = dict()
@@ -223,7 +239,7 @@ class VideoNetwork(TensorRecorder):
 
                 bg_transform_params = tf.reshape(
                     bg_transform_params,
-                    (self.batch_size, self.n_frames, 2*n_transform_latents))
+                    (self.batch_size, self.dynamic_n_frames, 2*n_transform_latents))
 
                 mean, log_std = tf.split(bg_transform_params, 2, axis=2)
                 std = self.std_nonlinearity(log_std)
@@ -232,7 +248,7 @@ class VideoNetwork(TensorRecorder):
 
                 # integrate across timesteps
                 logits = tf.cumsum(logits, axis=1)
-                logits = tf.reshape(logits, (self.batch_size*self.n_frames, n_transform_latents))
+                logits = tf.reshape(logits, (self.batch_size*self.dynamic_n_frames, n_transform_latents))
 
                 y, x, h, w = tf.split(logits, n_transform_latents, axis=1)
                 h = (0.9 - 0.5) * tf.nn.sigmoid(h) + 0.5
@@ -256,7 +272,9 @@ class VideoNetwork(TensorRecorder):
                 transforms = tf.concat([w, x, h, y], axis=-1)
                 grid_coords = warper(transforms)
 
-                grid_coords = tf.reshape(grid_coords, (self.batch_size, self.n_frames, *tf_shape(grid_coords)[1:]))
+                grid_coords = tf.reshape(
+                    grid_coords,
+                    (self.batch_size, self.dynamic_n_frames, *tf_shape(grid_coords)[1:]))
 
                 background = tf.contrib.resampler.resampler(background_raw, grid_coords)
 
@@ -265,10 +283,10 @@ class VideoNetwork(TensorRecorder):
                     bg_attr_std=bg_attr_std,
                     bg_attr_kl=bg_attr_kl,
                     bg_attr=bg_attr,
-                    bg_y=tf.reshape(y, (self.batch_size, self.n_frames, 1)),
-                    bg_x=tf.reshape(x, (self.batch_size, self.n_frames, 1)),
-                    bg_h=tf.reshape(h, (self.batch_size, self.n_frames, 1)),
-                    bg_w=tf.reshape(w, (self.batch_size, self.n_frames, 1)),
+                    bg_y=tf.reshape(y, (self.batch_size, self.dynamic_n_frames, 1)),
+                    bg_x=tf.reshape(x, (self.batch_size, self.dynamic_n_frames, 1)),
+                    bg_h=tf.reshape(h, (self.batch_size, self.dynamic_n_frames, 1)),
+                    bg_w=tf.reshape(w, (self.batch_size, self.dynamic_n_frames, 1)),
                     bg_transform_kl=kl,
                     bg_raw=background_raw,
                 )
@@ -278,7 +296,7 @@ class VideoNetwork(TensorRecorder):
             else:
                 raise Exception("Unrecognized background mode: {}.".format(cfg.background_cfg.mode))
 
-            self._tensors["background"] = background
+            self._tensors["background"] = background[:, :self.dynamic_n_frames]
 
 
 class BackgroundExtractor(RecurrentGridConvNet):
@@ -377,10 +395,10 @@ class SimpleVideoVAE(VideoNetwork):
 
         # --- encode ---
 
-        video = tf.reshape(self.inp, (self.batch_size * self.n_frames, *self.obs_shape[1:]))
+        video = tf.reshape(self.inp, (self.batch_size * self.dynamic_n_frames, *self.obs_shape[1:]))
         encoder_output = self.encoder(video, 2 * self.A, self.is_training)
         encoder_output = tf.layers.flatten(encoder_output)
-        encoder_output = tf.reshape(encoder_output, (self.batch_size, self.n_frames, encoder_output.shape[1]))
+        encoder_output = tf.reshape(encoder_output, (self.batch_size, self.dynamic_n_frames, encoder_output.shape[1]))
 
         attr, final_state = dynamic_rnn(
             self.cell, encoder_output, initial_state=self.cell.zero_state(self.batch_size, tf.float32),
@@ -398,7 +416,7 @@ class SimpleVideoVAE(VideoNetwork):
 
         # --- decode ---
 
-        decoder_input = tf.reshape(attr, (self.batch_size*self.n_frames, attr.shape[2]))
+        decoder_input = tf.reshape(attr, (self.batch_size*self.dynamic_n_frames, attr.shape[2]))
 
         reconstruction = self.decoder(decoder_input, self.inp.shape[2:], self.is_training)
         reconstruction = reconstruction[:, :self.obs_shape[1], :self.obs_shape[2], :]

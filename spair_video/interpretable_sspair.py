@@ -101,6 +101,52 @@ def top_k_select_objects(propagated, discovered):
     return selected_objects
 
 
+def apply_keys(d, values):
+    new = type(d)()
+    for (k, v), _v in zip(sorted(d.items()), values):
+        if isinstance(_v, tf.Tensor):
+            new[k] = _v
+        else:
+            new[k] = apply_keys(v, _v)
+    return new
+
+
+Dist = tfp.distributions.Distribution
+
+
+def expand_distributions(structure):
+    structure = map_structure(
+        lambda d: (
+            {k: v for k, v in d.parameters.items() if isinstance(v, tf.Tensor)}
+            if isinstance(d, Dist) else d
+        ),
+        structure, is_leaf=lambda d: isinstance(d, (tf.Tensor, Dist)))
+    return structure
+
+
+def append_to_tensor_arrays(f, structured, tensor_arrays):
+    new_tensor_arrays = []
+    for (k, v), ta in zip(sorted(structured.items()), tensor_arrays):
+        if isinstance(v, tf.Tensor):
+            result = ta.write(f, v)
+        else:
+            result = append_to_tensor_arrays(f, v, ta)
+        new_tensor_arrays.append(result)
+    return new_tensor_arrays
+
+
+def make_tensor_arrays(structure, n_frames):
+    tas = []
+    for k, v in sorted(structure.items()):
+        if isinstance(v, tf.Tensor):
+            ta = tf.TensorArray(v.dtype, n_frames, dynamic_size=False, element_shape=v.shape)
+            tas.append(ta)
+        else:
+            _tas = make_tensor_arrays(v, n_frames)
+            tas.append(_tas)
+    return tas
+
+
 class InterpretableSequentialSpair(VideoNetwork):
     build_backbone = Param()
     build_discovery_feature_fuser = Param()
@@ -142,6 +188,209 @@ class InterpretableSequentialSpair(VideoNetwork):
 
         return self._eval_funcs
 
+    def _loop_cond(self, f, *_):
+        return f < self.dynamic_n_frames
+
+    def _loop_body(self, f, normalized_box, attr, z, obj, _all, *tensor_arrays):
+        objects = AttrDict(
+            normalized_box=normalized_box,
+            attr=attr,
+            z=z,
+            obj=obj,
+            all=_all,
+        )
+
+        structured_result = self._inner_loop_body(f, objects)
+        structured_result = expand_distributions(structured_result)
+        tensor_arrays = append_to_tensor_arrays(f, structured_result, tensor_arrays)
+        selected_objects = structured_result.selected_objects
+
+        f += 1
+
+        return [
+            f,
+            selected_objects.normalized_box,
+            selected_objects.attr,
+            selected_objects.z,
+            selected_objects.obj,
+            selected_objects.all,
+            *tensor_arrays]
+
+    def _inner_loop_body(self, f, objects):
+        # objects
+
+        # --- propagation ---
+
+        object_features = apply_object_wise(
+            self.propagation_obj_transform, objects.all, self.n_hidden, self.is_training)
+        propagation_object_features = self.propagation_feature_extractor(object_features, self.is_training)
+
+        propagation_args = (self.inp[:, f], propagation_object_features, objects, self.is_training,)
+
+        posterior_propagated_objects = self.propagation_layer(*propagation_args, is_posterior=True)
+        propagated_objects = posterior_propagated_objects
+
+        # if self.learn_prior:
+        #     prior_propagated_objects = self.propagation_layer(*propagation_args, is_posterior=False)
+        # else:
+        #     prior_propagated_objects = None
+
+        # propagated_objects = tf.cond(
+        #     use_prior_objects,
+        #     lambda: prior_propagated_objects,
+        #     lambda: posterior_propagated_objects)
+
+        # --- discovery, selection and rendering ---
+
+        # TODO: also take into account the global hidden state.
+
+        obj_center_y = propagated_objects.yt + propagated_objects.ys / 2
+        obj_center_x = propagated_objects.xt + propagated_objects.xs / 2
+        object_locs = tf.concat([obj_center_y, obj_center_x], axis=2)
+        propagated_object_features = apply_object_wise(
+            self.discovery_obj_transform, propagated_objects.all, self.n_hidden, self.is_training)
+        propagated_object_features = self.discovery_feature_extractor(
+            propagated_object_features, object_locs, self.grid_cell_centers, self.is_training)
+        propagated_object_features = tf.reshape(
+            propagated_object_features, (self.batch_size, self.H, self.W, self.n_hidden))
+
+        # if self.learn_prior:
+        #     dummy_backbone_output = tf.zeros_like(self.backbone_output[:, f])
+
+        #     is_prior_tf = tf.ones_like(propagated_object_features[..., 0:2]) * [0, 1]
+        #     prior_features_inp = tf.concat(
+        #         [propagated_object_features, dummy_backbone_output, is_prior_tf], axis=-1)
+
+        #     prior_discovery_features = self.discovery_feature_fuser(
+        #         prior_features_inp, self.B*self.n_backbone_features, self.is_training)
+
+        #     prior_discovery_features = tf.reshape(
+        #         prior_discovery_features, (self.batch_size, self.H, self.W, self.B, self.n_backbone_features))
+
+        #     prior_discovered_objects = self.discovery_layer(
+        #         self.inp[:, f], prior_discovery_features, self.is_training, is_posterior=False)
+
+        #     prior_selected_objects = top_k_select_objects(prior_propagated_objects, prior_discovered_objects)
+
+        #     prior_render_tensors = self.object_renderer(
+        #         prior_selected_objects, self._tensors["background"][:, f], self.is_training)
+
+        # else:
+        #     prior_discovered_objects = None
+
+        # --- discovery ---
+
+        is_posterior_tf = tf.ones_like(propagated_object_features[..., 0:2]) * [1, 0]
+        posterior_features_inp = tf.concat(
+            [propagated_object_features, self.backbone_output[:, f], is_posterior_tf], axis=-1)
+
+        posterior_discovery_features = self.discovery_feature_fuser(
+            posterior_features_inp, self.B*self.n_backbone_features, self.is_training)
+
+        posterior_discovery_features = tf.reshape(
+            posterior_discovery_features, (self.batch_size, self.H, self.W, self.B, self.n_backbone_features))
+
+        posterior_discovered_objects = self.discovery_layer(
+            self.inp[:, f], posterior_discovery_features, self.is_training, is_posterior=True)
+
+        # --- discovery mask ---
+
+        discovery_mask_dist = tfp.distributions.Bernoulli(
+            (1.-self.discovery_dropout_prob) * tf.ones(self.batch_size))
+        discovery_mask = tf.cast(discovery_mask_dist.sample(), tf.float32)
+        do_mask = self.float_is_training * tf.cast(f > 0, tf.float32)
+        discovery_mask = do_mask * discovery_mask + (1 - do_mask) * tf.ones(self.batch_size)
+        discovery_mask = discovery_mask[:, None, None, None, None]
+
+        posterior_discovered_objects.obj = discovery_mask * posterior_discovered_objects.obj
+        posterior_discovered_objects.render_obj = discovery_mask * posterior_discovered_objects.render_obj
+
+        # --- object selection ---
+
+        posterior_selected_objects = top_k_select_objects(
+            posterior_propagated_objects, posterior_discovered_objects)
+
+        # --- rendering ---
+
+        posterior_render_tensors = self.object_renderer(
+            posterior_selected_objects, self._tensors["background"][:, f], self.is_training)
+
+        # ---
+
+        render_tensors = posterior_render_tensors
+        selected_objects = posterior_selected_objects
+
+        # render_tensors = tf.cond(
+        #     use_prior_objects,
+        #     lambda: prior_render_tensors,
+        #     lambda: posterior_render_tensors)
+
+        # selected_objects = tf.cond(
+        #     use_prior_objects,
+        #     lambda: prior_selected_objects,
+        #     lambda: posterior_selected_objects)
+
+        # --- appearance of object sets for plotting ---
+
+        posterior_propagated_objects.update(
+            self.object_renderer(posterior_propagated_objects, None, self.is_training, appearance_only=True))
+        posterior_discovered_objects.update(
+            self.object_renderer(posterior_discovered_objects, None, self.is_training, appearance_only=True))
+
+        # --- kl ---
+
+        # For obj_kl:
+        # The only one that is special is disc_indep_kl, which should make use of the formulation that we used
+        # independent SPAIR. The others just do normal correspondence between independent distributions, using
+        # the standard formula for KL divergence between concrete distributions.
+
+        prop_indep_prior_kl = self.propagation_layer.compute_kl(posterior_propagated_objects)
+        disc_indep_prior_kl = self.discovery_layer.compute_kl(
+            posterior_discovered_objects, existing_objects=propagated_objects.obj)
+
+        _tensors = AttrDict(
+
+            posterior=AttrDict(
+                prop=posterior_propagated_objects,
+                disc=posterior_discovered_objects,
+                select=posterior_selected_objects,
+                render=posterior_render_tensors,
+            ),
+
+            selected_objects=selected_objects,
+
+            prop_indep_prior_kl=prop_indep_prior_kl,
+            disc_indep_prior_kl=disc_indep_prior_kl,
+
+            **render_tensors,
+        )
+
+        # --- prior ---
+
+        # if self.learn_prior:
+        #     prior_propagated_objects.update(
+        #         self.object_renderer(prior_propagated_objects, None, self.is_training, appearance_only=True))
+        #     prior_discovered_objects.update(
+        #         self.object_renderer(prior_discovered_objects, None, self.is_training, appearance_only=True))
+
+        #     prop_learned_prior_kl = self.propagation_layer.compute_kl(
+        #         posterior_propagated_objects, prior=prior_propagated_objects)
+        #     disc_learned_prior_kl = self.discovery_layer.compute_kl(
+        #         posterior_discovered_objects, prior=prior_discovered_objects)
+
+        #     _tensors.update(
+        #         prior=AttrDict(
+        #             prop=prior_propagated_objects,
+        #             disc=prior_discovered_objects,
+        #             select=prior_selected_objects,
+        #             render=prior_render_tensors,
+        #         ),
+        #         disc_learned_prior_kl=disc_learned_prior_kl,
+        #         prop_learned_prior_kl=prop_learned_prior_kl,
+        #     )
+
+        return _tensors
+
     def build_representation(self):
         # --- init modules ---
 
@@ -152,7 +401,7 @@ class InterpretableSequentialSpair(VideoNetwork):
 
         self.B = len(self.anchor_boxes)
 
-        backbone_output, n_grid_cells, grid_cell_size = self.backbone(
+        self.backbone_output, n_grid_cells, grid_cell_size = self.backbone(
             self.inp, self.B*self.n_backbone_features, self.is_training)
 
         self.H, self.W = [int(i) for i in n_grid_cells]
@@ -196,209 +445,31 @@ class InterpretableSequentialSpair(VideoNetwork):
         y = (np.arange(H, dtype='f') + 0.5) / H
         x = (np.arange(W, dtype='f') + 0.5) / W
         x, y = np.meshgrid(x, y)
-        grid_cell_centers = tf.constant(np.concatenate([y.flatten()[:, None], x.flatten()[:, None]], axis=1))
+        self.grid_cell_centers = tf.constant(np.concatenate([y.flatten()[:, None], x.flatten()[:, None]], axis=1))
 
         tensors = []
         objects = self.propagation_layer.null_object_set(self.batch_size)
 
-        for f in range(self.n_frames):
-            print("\n" + "-" * 20 + "Building network for frame {}".format(f) + "-" * 20)
-            use_prior_objects = self.learn_prior and 0 <= self.prior_start_step <= f
+        f = tf.constant(0, dtype=tf.int32)
+        structure = self._inner_loop_body(f, objects)
 
-            # --- propagation ---
+        structure = expand_distributions(structure)
 
-            object_features = apply_object_wise(
-                self.propagation_obj_transform, objects.all, self.n_hidden, self.is_training)
-            propagation_object_features = self.propagation_feature_extractor(object_features, self.is_training)
+        tensor_arrays = make_tensor_arrays(structure, self.dynamic_n_frames)
 
-            propagation_args = (self.inp[:, f], propagation_object_features, objects, self.is_training,)
+        loop_vars = [f, objects.normalized_box, objects.attr, objects.z, objects.obj, objects.all, *tensor_arrays]
 
-            posterior_propagated_objects = self.propagation_layer(*propagation_args, is_posterior=True)
+        result = tf.while_loop(self._loop_cond, self._loop_body, loop_vars)
 
-            if self.learn_prior:
-                prior_propagated_objects = self.propagation_layer(*propagation_args, is_posterior=False)
-            else:
-                prior_propagated_objects = None
+        tensor_arrays = result[6:]
 
-            if use_prior_objects:
-                propagated_objects = prior_propagated_objects
-            else:
-                propagated_objects = posterior_propagated_objects
+        tensors = map_structure(lambda ta: ta.stack(), tensor_arrays, is_leaf=lambda t: isinstance(t, tf.TensorArray))
+        tensors = map_structure(
+            lambda t: tf.transpose(t, (1, 0, *range(2, len(t.shape)))),
+            tensors, is_leaf=lambda t: isinstance(t, tf.Tensor))
+        tensors = apply_keys(structure, tensors)
 
-            # --- discovery, selection and rendering ---
-
-            # TODO: also take into account the global hidden state.
-
-            obj_center_y = propagated_objects.yt + propagated_objects.ys / 2
-            obj_center_x = propagated_objects.xt + propagated_objects.xs / 2
-            object_locs = tf.concat([obj_center_y, obj_center_x], axis=2)
-            propagated_object_features = apply_object_wise(
-                self.discovery_obj_transform, propagated_objects.all, self.n_hidden, self.is_training)
-            propagated_object_features = self.discovery_feature_extractor(
-                propagated_object_features, object_locs, grid_cell_centers, self.is_training)
-            propagated_object_features = tf.reshape(propagated_object_features, (self.batch_size, H, W, self.n_hidden))
-
-            if self.learn_prior:
-                dummy_backbone_output = tf.zeros_like(backbone_output[:, f])
-
-                is_prior_tf = tf.ones_like(propagated_object_features[..., 0:2]) * [0, 1]
-                prior_features_inp = tf.concat(
-                    [propagated_object_features, dummy_backbone_output, is_prior_tf], axis=-1)
-
-                prior_discovery_features = self.discovery_feature_fuser(
-                    prior_features_inp, self.B*self.n_backbone_features, self.is_training)
-
-                prior_discovery_features = tf.reshape(
-                    prior_discovery_features, (self.batch_size, self.H, self.W, self.B, self.n_backbone_features))
-
-                prior_discovered_objects = self.discovery_layer(
-                    self.inp[:, f], prior_discovery_features, self.is_training, is_posterior=False)
-
-                prior_selected_objects = top_k_select_objects(prior_propagated_objects, prior_discovered_objects)
-
-                prior_render_tensors = self.object_renderer(
-                    prior_selected_objects, self._tensors["background"][:, f], self.is_training)
-
-            else:
-                prior_discovered_objects = None
-
-            # --- discovery ---
-
-            is_posterior_tf = tf.ones_like(propagated_object_features[..., 0:2]) * [1, 0]
-            posterior_features_inp = tf.concat(
-                [propagated_object_features, backbone_output[:, f], is_posterior_tf], axis=-1)
-
-            posterior_discovery_features = self.discovery_feature_fuser(
-                posterior_features_inp, self.B*self.n_backbone_features, self.is_training)
-
-            posterior_discovery_features = tf.reshape(
-                posterior_discovery_features, (self.batch_size, self.H, self.W, self.B, self.n_backbone_features))
-
-            posterior_discovered_objects = self.discovery_layer(
-                self.inp[:, f], posterior_discovery_features, self.is_training, is_posterior=True)
-
-            if f > 0:
-                discovery_mask_dist = tfp.distributions.Bernoulli(
-                    (1.-self.discovery_dropout_prob) * tf.ones(self.batch_size))
-                discovery_mask = tf.cast(discovery_mask_dist.sample(), tf.float32)
-                discovery_mask = (
-                    self.float_is_training * discovery_mask
-                    + (1 - self.float_is_training) * tf.ones(self.batch_size)
-                )
-                discovery_mask = discovery_mask[:, None, None, None, None]
-
-                posterior_discovered_objects.obj = discovery_mask * posterior_discovered_objects.obj
-                posterior_discovered_objects.render_obj = discovery_mask * posterior_discovered_objects.render_obj
-
-            # --- object selection ---
-
-            posterior_selected_objects = top_k_select_objects(
-                posterior_propagated_objects, posterior_discovered_objects)
-
-            # --- rendering ---
-
-            posterior_render_tensors = self.object_renderer(
-                posterior_selected_objects, self._tensors["background"][:, f], self.is_training)
-
-            # ---
-
-            if use_prior_objects:
-                render_tensors = prior_render_tensors
-                selected_objects = prior_selected_objects
-            else:
-                render_tensors = posterior_render_tensors
-                selected_objects = posterior_selected_objects
-
-            # --- appearance of object sets for plotting ---
-
-            posterior_propagated_objects.update(
-                self.object_renderer(posterior_propagated_objects, None, self.is_training, appearance_only=True))
-            posterior_discovered_objects.update(
-                self.object_renderer(posterior_discovered_objects, None, self.is_training, appearance_only=True))
-
-            # --- kl ---
-
-            # For obj_kl:
-            # The only one that is special is disc_indep_kl, which should make use of the formulation that we used
-            # independent SPAIR. The others just do normal correspondence between independent distributions, using
-            # the standard formula for KL divergence between concrete distributions.
-
-            prop_indep_prior_kl = self.propagation_layer.compute_kl(posterior_propagated_objects)
-            disc_indep_prior_kl = self.discovery_layer.compute_kl(
-                posterior_discovered_objects, existing_objects=propagated_objects.obj)
-
-            _tensors = AttrDict(
-
-                posterior=AttrDict(
-                    prop=posterior_propagated_objects,
-                    disc=posterior_discovered_objects,
-                    select=posterior_selected_objects,
-                    render=posterior_render_tensors,
-                ),
-
-                selected_objects=selected_objects,
-
-                prop_indep_prior_kl=prop_indep_prior_kl,
-                disc_indep_prior_kl=disc_indep_prior_kl,
-
-                **render_tensors,
-            )
-
-            # --- prior ---
-
-            if self.learn_prior:
-                prior_propagated_objects.update(
-                    self.object_renderer(prior_propagated_objects, None, self.is_training, appearance_only=True))
-                prior_discovered_objects.update(
-                    self.object_renderer(prior_discovered_objects, None, self.is_training, appearance_only=True))
-
-                prop_learned_prior_kl = self.propagation_layer.compute_kl(
-                    posterior_propagated_objects, prior=prior_propagated_objects)
-                disc_learned_prior_kl = self.discovery_layer.compute_kl(
-                    posterior_discovered_objects, prior=prior_discovered_objects)
-
-                _tensors.update(
-                    prior=AttrDict(
-                        prop=prior_propagated_objects,
-                        disc=prior_discovered_objects,
-                        select=prior_selected_objects,
-                        render=prior_render_tensors,
-                    ),
-                    disc_learned_prior_kl=disc_learned_prior_kl,
-                    prop_learned_prior_kl=prop_learned_prior_kl,
-                )
-
-            tensors.append(_tensors)
-
-            # --- finalize step ---
-
-            objects = selected_objects
-
-        # --- consolidate values from different frames/timesteps ---
-
-        def mapper(*t):
-            if isinstance(t[0], tf.Tensor):
-                return tf.stack(t, axis=1)
-            else:
-                dist = t[0]
-                dist_class = type(dist)
-                params = dist.parameters.copy()
-                tensor_keys = sorted(key for key, tensor in params.items() if isinstance(tensor, tf.Tensor))
-                tensor_params = {}
-
-                for key in tensor_keys:
-                    tensor_params[key] = tf.stack([_t.parameters[key] for _t in t], axis=1)
-
-                params.update(tensor_params)
-                return dist_class(**params)
-
-        self._tensors.update(
-            map_structure(
-                mapper, *tensors,
-                is_leaf=lambda t: isinstance(t, tf.Tensor) or isinstance(t, tfp.distributions.Distribution),
-            )
-        )
-
+        self._tensors.update(tensors)
         self._tensors.update(**self._tensors['selected_objects'])
 
         pprint.pprint(self._tensors)
