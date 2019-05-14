@@ -845,11 +845,12 @@ class ISSPAIR_RenderHook(RenderHook):
                         ax = disc_axes[h * B + b, 3 * w]
 
                         color = obj * self.on_color + (1-obj) * self.off_color
+
+                        self.imshow(ax, _fetched.disc.glimpse[idx, t, h, w, b, :, :, :])
+
                         obj_rect = patches.Rectangle(
                             (1., 0), 0.2, 1, clip_on=False, transform=ax.transAxes, facecolor=color)
                         ax.add_patch(obj_rect)
-
-                        self.imshow(ax, _fetched.disc.glimpse[idx, t, h, w, b, :, :, :])
 
                         ax = disc_axes[h * B + b, 3 * w + 1]
                         self.imshow(ax, _fetched.disc.appearance[idx, t, h, w, b, :, :, :3])
@@ -888,12 +889,12 @@ class ISSPAIR_RenderHook(RenderHook):
 
                         ax = prop_axes[3*k]
 
+                        self.imshow(ax, _fetched.prop.glimpse[idx, t, k, :, :, :])
+
                         color = obj * self.on_color + (1-obj) * self.off_color
                         obj_rect = patches.Rectangle(
                             (1., 0), 0.2, 1, clip_on=False, transform=ax.transAxes, facecolor=color)
                         ax.add_patch(obj_rect)
-
-                        self.imshow(ax, _fetched.prop.glimpse[idx, t, k, :, :, :])
 
                         ax = prop_axes[3*k+1]
                         self.imshow(ax, _fetched.prop.appearance[idx, t, k, :, :, :3])
@@ -942,13 +943,13 @@ class ISSPAIR_RenderHook(RenderHook):
 
                         ax = select_axes[3*k+1]
 
+                        ax.set_title(flt(obj=obj, z=z, xs=xs, ys=ys, xt=xt, yt=yt))
+                        self.imshow(ax, final_weight_images[k])
+
                         color = obj * self.on_color + (1-obj) * self.off_color
                         obj_rect = patches.Rectangle(
                             (-0.2, 0), 0.2, 1, clip_on=False, transform=ax.transAxes, facecolor=color)
                         ax.add_patch(obj_rect)
-
-                        ax.set_title(flt(obj=obj, z=z, xs=xs, ys=ys, xt=xt, yt=yt))
-                        self.imshow(ax, final_weight_images[k])
 
                     # --- other ---
 
