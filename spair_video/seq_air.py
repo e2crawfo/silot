@@ -24,7 +24,10 @@ from spair_video.core import VideoNetwork, MOTMetrics
 
 from sqair.sqair_modules import Propagate, Discover
 from sqair.core import DiscoveryCore, PropagationCore
-from sqair.modules import Encoder, StochasticTransformParam, StepsPredictor, Decoder, AIRDecoder, AIREncoder, SpatialTransformer
+from sqair.modules import (
+    Encoder, StochasticTransformParam, FixedStepsPredictor, StepsPredictor,
+    Decoder, AIRDecoder, AIREncoder, SpatialTransformer
+)
 from sqair.seq import SequentialAIR
 from sqair.propagate import make_prior, SequentialSSM
 from sqair import index
@@ -385,6 +388,7 @@ class SQAIR(VideoNetwork):
     output_scale = Param()
     output_std = Param()
     glimpse_size = Param()
+    fixed_presence = Param()
 
     rnn_class = Param()
     time_rnn_class = Param()
@@ -465,7 +469,12 @@ class SQAIR(VideoNetwork):
         training_wheels = self.training_wheels
 
         transform_estimator = partial(StochasticTransformParam, layers, self.transform_var_bias)
-        steps_predictor = partial(StepsPredictor, steps_pred_hidden, self.disc_step_bias, training_wheels=training_wheels)
+
+        if self.fixed_presence:
+            disc_steps_predictor = partial(FixedStepsPredictor, discovery=True)
+        else:
+            disc_steps_predictor = partial(
+                StepsPredictor, steps_pred_hidden, self.disc_step_bias, training_wheels=training_wheels)
 
         # This is the input image encoder. Currently it is an MLP, which results in a huge number of parameters
         # because we are using color images. Probably want to use a convolutional network instead.
@@ -476,7 +485,7 @@ class SQAIR(VideoNetwork):
 
         with tf.variable_scope('discovery'):
             discover_cell = DiscoveryCore(img_size, self.glimpse_size, self.n_what, self.rnn_class(self.n_hidden),
-                                          input_encoder, glimpse_encoder, transform_estimator, steps_predictor,
+                                          input_encoder, glimpse_encoder, transform_estimator, disc_steps_predictor,
                                           debug=self.debug, training_wheels=training_wheels)
 
             discover = Discover(self.n_steps_per_image, discover_cell,
@@ -490,14 +499,18 @@ class SQAIR(VideoNetwork):
             input_encoder = lambda: discover_cell._input_encoder
             glimpse_encoder = lambda: discover_cell._glimpse_encoder
             transform_estimator = partial(StochasticTransformParam, layers, self.transform_var_bias)
-            steps_predictor = partial(StepsPredictor, steps_pred_hidden, self.prop_step_bias)
+
+            if self.fixed_presence:
+                prop_steps_predictor = partial(FixedStepsPredictor, discovery=False)
+            else:
+                prop_steps_predictor = partial(StepsPredictor, steps_pred_hidden, self.prop_step_bias)
 
             # Prop cell should have a different rnn cell but should share all other estimators
             propagate_rnn_cell = self.rnn_class(self.n_hidden)
             temporal_rnn_cell = self.time_rnn_class(self.n_hidden)
             propagation_cell = PropagationCore(img_size, self.glimpse_size, self.n_what, propagate_rnn_cell,
                                                input_encoder, glimpse_encoder, transform_estimator,
-                                               steps_predictor, temporal_rnn_cell,
+                                               prop_steps_predictor, temporal_rnn_cell,
                                                debug=self.debug, training_wheels=training_wheels)
             ssm = SequentialSSM(propagation_cell)
 
