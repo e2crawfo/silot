@@ -93,6 +93,7 @@ class VideoNetwork(TensorRecorder):
     noisy = Param()
     stage_steps = Param()
     initial_n_frames = Param()
+    n_frames_scale = Param()
 
     needs_background = True
     background_encoder = None
@@ -132,8 +133,9 @@ class VideoNetwork(TensorRecorder):
         return self._tensors["float_is_training"]
 
     def _call(self, data, is_training):
-        inp = data["image"]
+        self.data = data
 
+        inp = data["image"]
         self._tensors = AttrDict(
             inp=inp,
             is_training=is_training,
@@ -169,7 +171,9 @@ class VideoNetwork(TensorRecorder):
             self.dynamic_n_frames = tf_shape(inp)[1]
         else:
             self.current_stage = tf.cast(tf.train.get_or_create_global_step(), tf.int32) // self.stage_steps
-            self.dynamic_n_frames = tf.minimum(self.initial_n_frames + self.current_stage, tf_shape(inp)[1])
+            self.dynamic_n_frames = tf.minimum(
+                self.initial_n_frames + self.n_frames_scale * self.current_stage,
+                tf_shape(inp)[1])
 
         self._tensors.inp = self._tensors.inp[:, :self.dynamic_n_frames]
         self._tensors.annotations = self._tensors.annotations[:, :self.dynamic_n_frames]

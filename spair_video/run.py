@@ -202,8 +202,7 @@ def spair_prepare_func():
     from dps import cfg
     cfg.anchor_boxes = [cfg.tile_shape]
     cfg.count_prior_log_odds = (
-        "Exp(start={}, end={}, decay_rate=0.1, "
-        "decay_steps={}, log=True)".format(
+        "Exp(start={}, end={}, decay_rate=0.1, decay_steps={}, log=True)".format(
             cfg.initial_count_prior_log_odds,
             cfg.final_count_prior_log_odds, cfg.count_prior_decay_steps)
     )
@@ -321,9 +320,6 @@ alg_configs = dict(
         object_shape=(14, 14),
         A=64,
 
-        # TODO: see if this helps / is necessary
-        batch_size=4,
-
         min_hw=0.0,
         max_hw=1.0,
 
@@ -428,6 +424,7 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     where_s_scale=0.2,
     stage_steps=None,
     initial_n_frames=2,
+    n_frames_scale=2,
 )
 
 alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
@@ -436,7 +433,7 @@ alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
     d_hw_prior_std=0.1,
     where_t_scale=1.0,
     where_s_scale=1.0,
-    stage_steps=500,
+    stage_steps=50000,
 )
 
 alg_configs["load_isspair"] = alg_configs["isspair"].copy(
@@ -489,6 +486,8 @@ alg_configs["test_isspair"] = alg_configs["isspair"].copy(
 # --- SQAIR ---
 
 alg_configs['sqair'] = Config(
+    stopping_criteria="AP,max",
+    threshold=1.0,
     get_updater=SQAIRUpdater,
     build_network=SQAIR,
     render_hook=SQAIR_RenderHook(),
@@ -527,8 +526,6 @@ alg_configs['sqair'] = Config(
     max_steps=int(2e6),
     variable_scope_depth=None,
     n_val=992,  # has to be a multiple of the batch size
-    seq_len=3,  # start at this number of frames, increase by one every stage_steps-many training steps
-    stage_steps=int(1e5),
     patch_shape=(21, 21),
     image_shape=(50, 50),
     tile_shape=(50, 50),
@@ -538,16 +535,21 @@ alg_configs['sqair'] = Config(
     mot_eval=False,
     colours=None,
     fixed_presence=False,
+
+    stage_steps=50000,
+    initial_n_frames=2,
+    n_frames_scale=2,
 )
 
 alg_configs['exp_sqair'] = alg_configs['sqair'].copy(
     image_shape=(48, 48),
     tile_shape=(48, 48),
+    colours="white",
     disc_step_bias=5.,
     disc_prior_type='special',
-    min_digits=9,
-    max_digits=9,
-    n_steps_per_image=9,
+    min_digits=2,
+    max_digits=2,
+    n_steps_per_image=2,
     # min_digits=9,
     # max_digits=9,
     # n_steps_per_image=9,

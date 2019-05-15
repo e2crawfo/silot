@@ -44,8 +44,6 @@ class SQAIRUpdater(_Updater):
     output_std = Param()
     k_particles = Param()
     debug = Param()
-    stage_steps = Param()
-    seq_len = Param()
 
     def __init__(self, env, scope=None, **kwargs):
         self.lr_schedule = build_scheduled_value(self.lr_schedule, "lr")
@@ -89,13 +87,6 @@ class SQAIRUpdater(_Updater):
         tensor = tf.reduce_mean(tensor, 0)
         return tf.reduce_mean(self.importance_weights * tensor * self.k_particles)
 
-    def img_summaries(self):
-        recs = tf.cast(tf.round(tf.clip_by_value(self.resampled_canvas, 0., 1.) * 255), tf.uint8)
-        rec = tf.summary.image('reconstructions', recs[0])
-        inpt = tf.summary.image('inputs', self.obs[0])
-
-        return tf.summary.merge([rec, inpt])
-
     def compute_validation_pixelwise_mean(self, data):
         sess = tf.get_default_session()
 
@@ -125,43 +116,10 @@ class SQAIRUpdater(_Updater):
         self.data_manager.build_graph()
 
         data = self.data_manager.iterator.get_next()
-
-        self.tensors = AttrDict()
-
-        # if "label" in data:
-        #     self._tensors.update(
-        #         targets=data["label"],
-        #     )
-
-        # if "background" in data:
-        #     self._tensors.update(
-        #         background=data["background"],
-        #     )
-
         data['mean_img'] = self.compute_validation_pixelwise_mean(data)
-
-        global_step = tf.to_int32(tf.train.get_or_create_global_step())
-        stage = global_step // self.stage_steps
-        effective_n_frames = tf.minimum(self.seq_len + stage, self.n_frames)
-
         self.batch_size = cfg.batch_size
 
-        shape = list(tf_shape(data['image']))
-        shape[0] = cfg.batch_size
-        data['image'] = tf.reshape(data['image'], shape)[:, :effective_n_frames]
-
-        shape = list(tf_shape(data['annotations']['data']))
-        shape[0] = cfg.batch_size
-        data['annotations']['data'] = tf.reshape(data['annotations']['data'], shape)[:, :effective_n_frames]
-
-        shape = list(tf_shape(data['annotations']['mask']))
-        shape[0] = cfg.batch_size
-        data['annotations']['mask'] = tf.reshape(data['annotations']['mask'], shape)[:, :effective_n_frames]
-
-        data['processed_image'] = index.tile_input_for_iwae(
-            tf.transpose(data['image'], (1, 0, 2, 3, 4)), self.k_particles, with_time=True)
-
-        self.data = data
+        self.tensors = AttrDict()
 
         network_outputs = self.network(data, self.data_manager.is_training)
 
@@ -171,15 +129,10 @@ class SQAIRUpdater(_Updater):
         assert not network_losses
 
         self.tensors.update(network_tensors)
-        self.tensors['inp'] = data['image']
         self.tensors['where_coords'] = SpatialTransformer.to_coords(self.tensors['where'])
 
         self.recorded_tensors = recorded_tensors = dict(global_step=tf.train.get_or_create_global_step())
         self.recorded_tensors.update(network_recorded_tensors)
-        self.recorded_tensors.update(
-            effective_n_frames=tf.cast(effective_n_frames, tf.float32),
-            stage=tf.cast(stage, tf.float32),
-        )
 
         # --- values for training ---
 
@@ -190,8 +143,8 @@ class SQAIRUpdater(_Updater):
         self.elbo_iwae_per_example = targets.iwae(self.log_weights)
         self.elbo_iwae = tf.reduce_mean(self.elbo_iwae_per_example)
 
-        self.normalised_elbo_vae = self.elbo_vae / tf.to_float(effective_n_frames)
-        self.normalised_elbo_iwae = self.elbo_iwae / tf.to_float(effective_n_frames)
+        self.normalised_elbo_vae = self.elbo_vae / tf.to_float(self.network.dynamic_n_frames)
+        self.normalised_elbo_iwae = self.elbo_iwae / tf.to_float(self.network.dynamic_n_frames)
 
         self.importance_weights = tf.stop_gradient(tf.nn.softmax(self.log_weights, -1))
         self.ess = ops.ess(self.importance_weights, average=True)
@@ -201,18 +154,6 @@ class SQAIRUpdater(_Updater):
         # --- count accuracy ---
 
         if "annotations" in data:
-            self.tensors.update(
-                annotations=data["annotations"]["data"],
-                n_annotations=data["annotations"]["shapes"][:, 1],
-                n_valid_annotations=tf.to_int32(
-                    tf.reduce_sum(
-                        data["annotations"]["data"][:, :, :, 0]
-                        * tf.to_float(data["annotations"]["mask"][:, :, :, 0]),
-                        axis=2
-                    )
-                )
-            )
-
             gt_num_steps = tf.transpose(self.tensors.n_valid_annotations, (1, 0))[:, :, None]
             num_steps_per_sample = tf.reshape(
                 self.tensors.num_steps_per_sample, (-1, self.batch_size, self.k_particles))
@@ -229,7 +170,7 @@ class SQAIRUpdater(_Updater):
         log_probs = tf.reduce_sum(self.tensors.discrete_log_prob, 0)
         target = targets.vimco(self.log_weights, log_probs, self.elbo_iwae_per_example)
 
-        target /= tf.to_float(effective_n_frames)
+        target /= tf.to_float(self.network.dynamic_n_frames)
         loss_l2 = targets.l2_reg(self.l2_schedule)
         target += loss_l2
 
@@ -272,7 +213,7 @@ class SQAIRUpdater(_Updater):
         # --- record ---
 
         self.tensors['mse_per_sample'] = tf.reduce_mean(
-            (data['processed_image'] - self.tensors['canvas']) ** 2, (0, 2, 3, 4))
+            (self.tensors['processed_image'] - self.tensors['canvas']) ** 2, (0, 2, 3, 4))
         self.raw_mse = tf.reduce_mean(self.tensors['mse_per_sample'])
 
         self._log_resampled('mse')
@@ -408,6 +349,7 @@ class SQAIR(VideoNetwork):
     sample_from_prior = Param()
     training_wheels = Param()
     mot_eval = Param()
+    k_particles = Param()
 
     # Don't think we need these for this network
     attr_prior_mean = None
@@ -426,37 +368,20 @@ class SQAIR(VideoNetwork):
         self.training_wheels = build_scheduled_value(self.training_wheels, "training_wheels")
         super().__init__(env, updater, scope=scope, **kwargs)
 
-    def _call(self, data, is_training):
-        inp = data["processed_image"]
-
-        self._tensors = AttrDict(
-            inp=inp,
-            mean_img=data["mean_img"],
-            is_training=is_training,
-            float_is_training=tf.to_float(is_training),
-            batch_size=tf.shape(inp)[1],
-        )
-
-        self.record_tensors(
-            batch_size=tf.to_float(self.batch_size),
-            float_is_training=self.float_is_training
-        )
-
-        self.losses = dict()
-
-        with tf.variable_scope("representation", reuse=self.initialized):
-            if self.needs_background:
-                self.build_background()
-            self.build_representation()
-
-        return dict(
-            tensors=self._tensors,
-            recorded_tensors=self.recorded_tensors,
-            losses=self.losses,
-        )
-
     def build_representation(self):
-        _, _, *img_size = self.inp.shape.as_list()
+
+        processed_image = index.tile_input_for_iwae(
+            tf.transpose(self.inp, (1, 0, 2, 3, 4)), self.k_particles, with_time=True)
+        shape = list(tf_shape(processed_image))
+        shape[1] = cfg.batch_size * self.k_particles
+        processed_image = tf.reshape(processed_image, shape)
+
+        self._tensors.update(
+            processed_image=processed_image,
+            mean_img=self.data['mean_img'],
+        )
+
+        _, _, *img_size = processed_image.shape.as_list()
 
         layers = [self.n_hidden] * self.n_layers
 
@@ -523,7 +448,7 @@ class SQAIR(VideoNetwork):
             glimpse_decoder = partial(Decoder, layers, output_scale=self.output_scale)
             decoder = AIRDecoder(img_size, self.glimpse_size, glimpse_decoder,
                                  batch_dims=2,
-                                 mean_img=self._tensors["mean_img"],
+                                 mean_img=self._tensors.mean_img,
                                  output_std=self.output_std,)
 
         with tf.variable_scope('sequence'):
@@ -533,7 +458,7 @@ class SQAIR(VideoNetwork):
                 self.n_steps_per_image, self.glimpse_size, discover, propagate,
                 time_cell, decoder, sample_from_prior=self.sample_from_prior)
 
-        outputs = sequence_apdr(self.inp)
+        outputs = sequence_apdr(processed_image)
 
         self._tensors.update(outputs)
 
