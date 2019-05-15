@@ -328,7 +328,7 @@ class SQAIR(VideoNetwork):
     sample_from_prior = Param()
     output_scale = Param()
     output_std = Param()
-    glimpse_size = Param()
+    object_shape = Param()
     fixed_presence = Param()
 
     rnn_class = Param()
@@ -386,7 +386,7 @@ class SQAIR(VideoNetwork):
         layers = [self.n_hidden] * self.n_layers
 
         def glimpse_encoder():
-            return AIREncoder(img_size, self.glimpse_size, self.n_what, Encoder(layers),
+            return AIREncoder(img_size, self.object_shape, self.n_what, Encoder(layers),
                               masked_glimpse=self.masked_glimpse, debug=self.debug)
 
         steps_pred_hidden = self.n_hidden / 2
@@ -409,7 +409,7 @@ class SQAIR(VideoNetwork):
             input_encoder = cfg.build_input_encoder
 
         with tf.variable_scope('discovery'):
-            discover_cell = DiscoveryCore(img_size, self.glimpse_size, self.n_what, self.rnn_class(self.n_hidden),
+            discover_cell = DiscoveryCore(img_size, self.object_shape, self.n_what, self.rnn_class(self.n_hidden),
                                           input_encoder, glimpse_encoder, transform_estimator, disc_steps_predictor,
                                           debug=self.debug, training_wheels=training_wheels)
 
@@ -433,7 +433,7 @@ class SQAIR(VideoNetwork):
             # Prop cell should have a different rnn cell but should share all other estimators
             propagate_rnn_cell = self.rnn_class(self.n_hidden)
             temporal_rnn_cell = self.time_rnn_class(self.n_hidden)
-            propagation_cell = PropagationCore(img_size, self.glimpse_size, self.n_what, propagate_rnn_cell,
+            propagation_cell = PropagationCore(img_size, self.object_shape, self.n_what, propagate_rnn_cell,
                                                input_encoder, glimpse_encoder, transform_estimator,
                                                prop_steps_predictor, temporal_rnn_cell,
                                                debug=self.debug, training_wheels=training_wheels)
@@ -446,7 +446,7 @@ class SQAIR(VideoNetwork):
 
         with tf.variable_scope('decoder'):
             glimpse_decoder = partial(Decoder, layers, output_scale=self.output_scale)
-            decoder = AIRDecoder(img_size, self.glimpse_size, glimpse_decoder,
+            decoder = AIRDecoder(img_size, self.object_shape, glimpse_decoder,
                                  batch_dims=2,
                                  mean_img=self._tensors.mean_img,
                                  output_std=self.output_std,)
@@ -455,7 +455,7 @@ class SQAIR(VideoNetwork):
             time_cell = self.time_rnn_class(self.n_hidden)
 
             sequence_apdr = SequentialAIR(
-                self.n_steps_per_image, self.glimpse_size, discover, propagate,
+                self.n_steps_per_image, self.object_shape, discover, propagate,
                 time_cell, decoder, sample_from_prior=self.sample_from_prior)
 
         outputs = sequence_apdr(processed_image)

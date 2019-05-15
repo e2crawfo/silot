@@ -185,6 +185,13 @@ env_configs["small_shapes"] = env_configs["easy_shapes"].copy(
     object_shape=(14, 14),
 )
 
+env_configs["sqair_mnist"] = env_configs["moving_mnist"].copy(
+    patch_shape=(21, 21),
+    image_shape=(50, 50),
+    tile_shape=(50, 50),
+    colours="",
+)
+
 env_configs["moving_background"] = env_configs["small_shapes"].copy(
     min_shapes=1,
     max_shapes=5,
@@ -496,7 +503,6 @@ alg_configs['sqair'] = Config(
     constant_prop_prior=0.0,
     disc_prior_type='cat',
     step_success_prob=0.75,
-    disc_step_bias=1.,
     prop_step_bias=5.,
     prop_prior_step_bias=10.,
     prop_prior_type='rnn',
@@ -518,7 +524,6 @@ alg_configs['sqair'] = Config(
     n_layers=2,
     n_hidden=8*32,
     n_what=50,
-    glimpse_size=(20, 20),
     transform_var_bias=-3.,
     output_scale=0.25,
     output_std=0.3,
@@ -526,35 +531,25 @@ alg_configs['sqair'] = Config(
     max_steps=int(2e6),
     variable_scope_depth=None,
     n_val=992,  # has to be a multiple of the batch size
-    patch_shape=(21, 21),
-    image_shape=(50, 50),
-    tile_shape=(50, 50),
-    min_digits=0,
-    max_digits=2,
     training_wheels=0.0,
     mot_eval=False,
-    colours=None,
     fixed_presence=False,
 
     stage_steps=50000,
     initial_n_frames=2,
     n_frames_scale=2,
+    disc_step_bias=5.,
 )
 
 alg_configs['exp_sqair'] = alg_configs['sqair'].copy(
-    image_shape=(48, 48),
-    tile_shape=(48, 48),
-    colours="white",
-    disc_step_bias=5.,
     disc_prior_type='special',
+    fixed_presence=True,
     min_digits=2,
     max_digits=2,
     n_steps_per_image=2,
     # min_digits=9,
     # max_digits=9,
     # n_steps_per_image=9,
-    patch_shape=(14, 14),
-    fixed_presence=True,
 
     # patch_shape=(14, 14),
     # max_digits=5,
