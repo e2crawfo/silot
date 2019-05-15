@@ -17,7 +17,7 @@ from dps import cfg
 from dps.utils import Param, map_structure, Config
 from dps.utils.tf import RenderHook, tf_mean_sum, tf_shape, MLP
 
-from auto_yolo.models.core import AP, xent_loss
+from auto_yolo.models.core import AP, xent_loss, coords_to_pixel_space
 from auto_yolo.models.object_layer import GridObjectLayer, ObjectRenderer
 from auto_yolo.models.networks import AttentionLayer, SpatialAttentionLayer, apply_object_wise
 
@@ -153,7 +153,7 @@ class InterpretableSequentialSpair(VideoNetwork):
     build_mlp = Param()
 
     n_backbone_features = Param()
-    anchor_boxes = Param()
+    n_objects_per_cell = Param()
 
     train_reconstruction = Param()
     reconstruction_weight = Param()
@@ -399,7 +399,7 @@ class InterpretableSequentialSpair(VideoNetwork):
         self.maybe_build_subnet("discovery_obj_transform", builder=self.build_mlp)
         self.maybe_build_subnet("propagation_obj_transform", builder=self.build_mlp)
 
-        self.B = len(self.anchor_boxes)
+        self.B = self.n_objects_per_cell
 
         self.backbone_output, n_grid_cells, grid_cell_size = self.backbone(
             self.inp, self.B*self.n_backbone_features, self.is_training)
@@ -663,7 +663,9 @@ class ISSPAIR_RenderHook(RenderHook):
 
         for mode in modes.split():
             for kind in "disc prop select".split():
-                fetched[mode][kind].normalized_box *= [image_height, image_width, image_height, image_width]
+                yt, xt, ys, xs = np.split(fetched[mode][kind], 4, axis=-1)
+                fetched[mode][kind].pixel_space_box = coords_to_pixel_space(
+                    yt, xt, ys, xs, (image_height, image_width), cfg.anchor_box, top_left=True)
 
             output = fetched[mode].render.output
             fetched[mode].render.diff = self.normalize_images(np.abs(inp - output).mean(axis=-1, keepdims=True))
@@ -993,7 +995,7 @@ class ISSPAIR_RenderHook(RenderHook):
                         gt_axes.extend([ax_all_bb, ax_on_bb])
 
                         flat_obj = getattr(_fetched, short_name).obj[idx, t].flatten()
-                        flat_box = getattr(_fetched, short_name).normalized_box[idx, t].reshape(-1, 4)
+                        flat_box = getattr(_fetched, short_name).pixel_space_box[idx, t].reshape(-1, 4)
 
                         # Plot proposed bounding boxes
                         for o, (top, left, height, width) in zip(flat_obj, flat_box):

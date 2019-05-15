@@ -11,37 +11,21 @@ from dps.utils import Param
 from dps.utils.tf import tf_shape, apply_object_wise
 
 from auto_yolo.tf_ops import resampler_edge
-from auto_yolo.models.core import concrete_binary_pre_sigmoid_sample, concrete_binary_sample_kl
+from auto_yolo.models.core import concrete_binary_pre_sigmoid_sample, concrete_binary_sample_kl, coords_to_image_space
 from auto_yolo.models.object_layer import ObjectLayer
 
 
-def extract_affine_glimpse(image, object_shape, yt, xt, ys, xs, unit_square=False):
-    """
-    unit_square: whether (yt, xt) are in unit square coordinates (where (0, 0) is image top-left,
-    (1, 1) is image bottom-right) and need to be switched.
-
-    (yt, xt) are rectangle top-left. (ys, xs) are rectangle height and width if unit_square=True
-    or 1/2 height and width if unit_square=False. In either case, (ys, xs) can simply be interpreted
-    as the scale and do not need to be adjusted.
-
-    """
+def extract_affine_glimpse(image, object_shape, cyt, cxt, ys, xs):
+    """ (yt, xt) are rectangle center. (ys, xs) are rectangle height/width """
     _, *image_shape, image_depth = tf_shape(image)
     transform_constraints = snt.AffineWarpConstraints.no_shear_2d()
     warper = snt.AffineGridWarper(image_shape, object_shape, transform_constraints)
 
-    if unit_square:
-        # center instead of top left
-        cyt = yt + ys / 2
-        cxt = xt + xs / 2
+    # change coordinate system
+    cyt = 2 * cyt - 1
+    cxt = 2 * cxt - 1
 
-        # change coordinate system
-        cyt = 2 * cyt - 1
-        cxt = 2 * cxt - 1
-    else:
-        cyt = yt + ys
-        cxt = xt + xs
-
-    leading_shape = tf_shape(yt)[:-1]
+    leading_shape = tf_shape(cyt)[:-1]
 
     _boxes = tf.concat([xs, cxt, ys, cyt], axis=-1)
     _boxes = tf.reshape(_boxes, (-1, 4))
@@ -72,6 +56,8 @@ class ObjectPropagationLayer(ObjectLayer):
     d_z_prior_mean = Param()
     d_z_prior_std = Param()
     d_obj_log_odds_prior = Param()
+
+    anchor_box = Param()
 
     def null_object_set(self, batch_size):
         new_objects = AttrDict(
@@ -227,11 +213,7 @@ class ObjectPropagationLayer(ObjectLayer):
 
         base_features = tf.concat([features, is_posterior_tf], axis=-1)
 
-        yt, xt, ys, xs = tf.split(objects.normalized_box, 4, axis=-1)
-
-        # center instead of top left
-        cyt = yt + ys / 2
-        cxt = xt + xs / 2
+        cyt, cxt, ys, xs = tf.split(objects.normalized_box, 4, axis=-1)
 
         if self.use_glimpse and self.learn_glimpse_prime:
             # Do this regardless of is_posterior, otherwise ScopedFunction gets messed up
@@ -256,16 +238,15 @@ class ObjectPropagationLayer(ObjectLayer):
                 g_ys = 2.0 * ys
                 g_xs = 2.0 * xs
 
-            # convert from center to top/left
-            g_yt -= g_ys / 2
-            g_xt -= g_xs / 2
-
             # --- extract glimpse prime ---
 
-            glimpse_prime = extract_affine_glimpse(inp, self.object_shape, g_yt, g_xt, g_ys, g_xs, unit_square=True)
+            _, image_height, image_width, _ = tf_shape(inp)
+            g_yt, g_xt, g_ys, g_xs = coords_to_image_space(
+                g_yt, g_xt, g_ys, g_xs, (image_height, image_width), self.anchor_box, top_left=False)
+            glimpse_prime = extract_affine_glimpse(inp, self.object_shape, g_yt, g_xt, g_ys, g_xs)
         else:
-            g_yt = tf.zeros_like(yt)
-            g_xt = tf.zeros_like(xt)
+            g_yt = tf.zeros_like(cyt)
+            g_xt = tf.zeros_like(cxt)
             g_ys = tf.zeros_like(ys)
             g_xs = tf.zeros_like(xs)
             glimpse_prime = tf.zeros((batch_size, *obj_leading_shape, *self.object_shape, self.image_depth))
@@ -331,14 +312,13 @@ class ObjectPropagationLayer(ObjectLayer):
         new_ys = ys * (1 + self.where_s_scale * tf.nn.tanh(d_ys_logit))
         new_xs = xs * (1 + self.where_s_scale * tf.nn.tanh(d_xs_logit))
 
-        new_yt = new_cyt - new_ys / 2
-        new_xt = new_cxt - new_xs / 2
+        d_box = tf.concat([d_yt_logit, d_xt_logit, d_ys_logit, d_xs_logit], axis=-1)
 
-        new_box = tf.concat([new_yt, new_xt, new_ys, new_xs], axis=-1)
+        new_box = tf.concat([new_cyt, new_cxt, new_ys, new_xs], axis=-1)
 
         new_objects.update(
-            yt=new_yt,
-            xt=new_xt,
+            yt=new_cyt,
+            xt=new_cxt,
             ys=new_ys,
             xs=new_xs,
             normalized_box=new_box,
@@ -361,7 +341,12 @@ class ObjectPropagationLayer(ObjectLayer):
         # --- extract a glimpse using new box ---
 
         if is_posterior and self.use_glimpse:
-            glimpse = extract_affine_glimpse(inp, self.object_shape, new_yt, new_xt, new_ys, new_xs, unit_square=True)
+            _, image_height, image_width, _ = tf_shape(inp)
+            _new_cyt, _new_cxt, _new_ys, _new_xs = coords_to_image_space(
+                new_cyt, new_cxt, new_ys, new_xs, (image_height, image_width), self.anchor_box, top_left=False)
+
+            glimpse = extract_affine_glimpse(inp, self.object_shape, _new_cyt, _new_cxt, _new_ys, _new_xs)
+
         else:
             glimpse = tf.zeros((batch_size, *obj_leading_shape, *self.object_shape, self.image_depth))
 
@@ -374,7 +359,9 @@ class ObjectPropagationLayer(ObjectLayer):
 
         # --- predict change in attributes ---
 
-        d_attr_inp = tf.concat([base_features, new_box, encoded_glimpse], axis=-1)
+        # We shouldn't condition on new_box, not spatially invariant
+        # d_attr_inp = tf.concat([base_features, new_box, encoded_glimpse], axis=-1)
+        d_attr_inp = tf.concat([base_features, d_box, encoded_glimpse], axis=-1)
         d_attr_params = apply_object_wise(self.d_attr_network, d_attr_inp, 2*self.A, self.is_training)
 
         d_attr_mean, d_attr_log_std = tf.split(d_attr_params, 2, axis=-1)
@@ -399,7 +386,9 @@ class ObjectPropagationLayer(ObjectLayer):
 
         # --- z ---
 
-        d_z_inp = tf.concat([base_features, new_box, new_attr, encoded_glimpse], axis=-1)
+        # We shouldn't condition on new_box, not spatially invariant
+        # d_z_inp = tf.concat([base_features, new_box, new_attr, encoded_glimpse], axis=-1)
+        d_z_inp = tf.concat([base_features, d_box, new_attr, encoded_glimpse], axis=-1)
         d_z_params = apply_object_wise(self.d_z_network, d_z_inp, 2, self.is_training)
 
         d_z_mean, d_z_log_std = tf.split(d_z_params, 2, axis=-1)
@@ -429,7 +418,9 @@ class ObjectPropagationLayer(ObjectLayer):
 
         # --- obj ---
 
-        d_obj_inp = tf.concat([base_features, new_box, new_attr, new_z, encoded_glimpse], axis=-1)
+        # We shouldn't condition on new_box, not spatially invariant
+        # d_obj_inp = tf.concat([base_features, new_box, new_attr, new_z, encoded_glimpse], axis=-1)
+        d_obj_inp = tf.concat([base_features, d_box, new_attr, new_z, encoded_glimpse], axis=-1)
         d_obj_logits = apply_object_wise(self.d_obj_network, d_obj_inp, 1, self.is_training)
 
         d_obj_logits = self.training_wheels * tf.stop_gradient(d_obj_logits) + (1-self.training_wheels) * d_obj_logits

@@ -134,12 +134,12 @@ env_configs = dict(
     easy_shapes=Config(
         build_env=MovingShapes,
 
-        image_shape=(96, 96),
-        tile_shape=(96, 96),
-        patch_shape=(21, 21),
-        object_shape=(21, 21),
+        image_shape=(48, 48),
+        tile_shape=(48, 48),
+        patch_shape=(14, 14),
+        object_shape=(14, 14),
         min_shapes=1,
-        max_shapes=3,
+        max_shapes=4,
         max_overlap=14**2/2,
         one_hot=True,
         colours="red green blue cyan magenta yellow",
@@ -151,7 +151,15 @@ env_configs = dict(
         background_colours="black",
         background_cfg=dict(mode="colour", colour="black"),
         postprocessing="",
+        patch_size_std=0.1,
     )
+)
+
+env_configs["big_moving_mnist"] = env_configs["moving_mnist"].copy(
+    image_shape=(96, 96),
+    tile_shape=(48, 48),
+    min_digits=1,
+    max_digits=20,
 )
 
 env_configs["mnist_learned_background"] = env_configs["moving_mnist"].copy(
@@ -178,13 +186,6 @@ env_configs["mnist_learned_background"] = env_configs["moving_mnist"].copy(
     )
 )
 
-env_configs["small_shapes"] = env_configs["easy_shapes"].copy(
-    image_shape=(48, 48),
-    tile_shape=(48, 48),
-    patch_shape=(14, 14),
-    object_shape=(14, 14),
-)
-
 env_configs["sqair_mnist"] = env_configs["moving_mnist"].copy(
     patch_shape=(21, 21),
     image_shape=(50, 50),
@@ -192,22 +193,38 @@ env_configs["sqair_mnist"] = env_configs["moving_mnist"].copy(
     colours="",
 )
 
-env_configs["moving_background"] = env_configs["small_shapes"].copy(
-    min_shapes=1,
-    max_shapes=5,
-)
-
-env_configs["hard_shapes"] = env_configs["moving_background"].copy(
+env_configs["hard_shapes"] = env_configs["easy_shapes"].copy(
     shapes="circle diamond star x plus",
     colours="red green blue cyan magenta yellow",
     min_shapes=1, max_shapes=5, patch_shape=(21, 21), max_overlap=98,
-    patch_size_std=0.4, patch_speed=20, backgrounds="all"
+    patch_size_std=0.3, patch_speed=10, backgrounds="hard",
+    background_cfg=dict(
+        mode="learn_and_transform", A=16,
+        bg_shape=(120, 120),
+        build_encoder=lambda scope: BackgroundExtractor(
+            scope=scope,
+            build_cell=lambda n_hidden, scope: tf.contrib.rnn.GRUBlockCellV2(n_hidden, name=scope),
+            layers=[
+                dict(filters=8, kernel_size=4, strides=3),
+                dict(filters=8, kernel_size=4, strides=2),
+                dict(filters=8, kernel_size=4, strides=2),
+            ],
+        ),
+        build_decoder=lambda scope: ConvNet(
+            scope=scope,
+            layers=[
+                dict(filters=8, kernel_size=4, strides=2, transpose=True,),
+                dict(filters=8, kernel_size=4, strides=2, transpose=True,),
+                dict(filters=8, kernel_size=4, strides=3, transpose=True,),
+            ],
+        ),
+    )
 )
 
 
 def spair_prepare_func():
     from dps import cfg
-    cfg.anchor_boxes = [cfg.tile_shape]
+    cfg.anchor_box = cfg.tile_shape
     cfg.count_prior_log_odds = (
         "Exp(start={}, end={}, decay_rate=0.1, decay_steps={}, log=True)".format(
             cfg.initial_count_prior_log_odds,
@@ -280,6 +297,7 @@ alg_configs = dict(
         build_network=SequentialSpair,
         render_hook=SequentialSpair_RenderHook(),
         prepare_func=spair_prepare_func,
+        n_objects_per_cell=1,
 
         stopping_criteria="AP,max",
         threshold=1.0,
