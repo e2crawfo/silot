@@ -14,7 +14,7 @@ from dps.utils.tf import (
     RenderHook, tf_shape, ConvNet, RecurrentGridConvNet, tf_roll
 )
 
-from auto_yolo.models.core import normal_vae, TensorRecorder, xent_loss
+from auto_yolo.models.core import normal_vae, TensorRecorder, xent_loss, coords_to_pixel_space
 
 
 class MOTMetrics:
@@ -25,11 +25,15 @@ class MOTMetrics:
 
         B, F, n_objects = shape = obj.shape[:3]
         obj = obj.reshape(shape)
-        top, left, height, width = np.split(tensors['normalized_box'], 4, axis=-1)
-        top = top.reshape(shape) * updater.network.image_height
-        left = left.reshape(shape) * updater.network.image_width
-        height = height.reshape(shape) * updater.network.image_height
-        width = width.reshape(shape) * updater.network.image_height
+        y, x, height, width = np.split(tensors['normalized_box'], 4, axis=-1)
+        image_shape = (updater.network.image_height, updater.network.image_width)
+        anchor_box = updater.network.anchor_box
+        top, left, height, width = coords_to_pixel_space(y, x, height, width, image_shape, anchor_box, top_left=True)
+
+        top = top.reshape(shape)
+        left = left.reshape(shape)
+        height = height.reshape(shape)
+        width = width.reshape(shape)
 
         is_new = tensors['is_new']
         pred_ids = np.zeros((B, F), dtype=np.object)

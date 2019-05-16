@@ -177,7 +177,7 @@ class ObjectPropagationLayer(ObjectLayer):
         # TODO: possibly allow adjacent objects to depend on one another...this is the purpose of
         # SequentialSpair's "relational" network. Of course, maybe we hope that the input feature processing
         # is enough...but that doesn't allow taking into account the random values that are sampled.
-        # But in SPAIR, I found that the lateral connections didn't matter so much...
+        # But in SPAIR, I found that the lateral connections didn't matter so much...and these are analogous to those
 
         self.maybe_build_subnet("d_box_network", key="d_box", builder=cfg.build_lateral)
         self.maybe_build_subnet("d_attr_network", key="d_attr", builder=cfg.build_lateral)

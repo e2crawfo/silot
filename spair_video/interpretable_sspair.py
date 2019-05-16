@@ -19,7 +19,7 @@ from dps.utils.tf import RenderHook, tf_mean_sum, tf_shape, MLP
 
 from auto_yolo.models.core import AP, xent_loss, coords_to_pixel_space
 from auto_yolo.models.object_layer import GridObjectLayer, ObjectRenderer
-from auto_yolo.models.networks import AttentionLayer, SpatialAttentionLayer, apply_object_wise
+from auto_yolo.models.networks import SpatialAttentionLayerV2, apply_object_wise
 
 from spair_video.core import VideoNetwork, MOTMetrics
 from spair_video.propagation import ObjectPropagationLayer
@@ -165,6 +165,7 @@ class InterpretableSequentialSpair(VideoNetwork):
     learn_prior = Param()
     discovery_dropout_prob = Param()
     mot_eval = Param()
+    anchor_box = Param()
 
     discovery_layer = None
     discovery_feature_extractor = None
@@ -217,15 +218,16 @@ class InterpretableSequentialSpair(VideoNetwork):
             *tensor_arrays]
 
     def _inner_loop_body(self, f, objects):
-        # objects
 
         # --- propagation ---
 
-        object_features = apply_object_wise(
-            self.propagation_obj_transform, objects.all, self.n_hidden, self.is_training)
-        propagation_object_features = self.propagation_feature_extractor(object_features, self.is_training)
+        object_features = objects.all[..., 2:]
+        object_locs = objects.all[..., :2]
 
-        propagation_args = (self.inp[:, f], propagation_object_features, objects, self.is_training,)
+        object_features_for_prop = self.propagation_feature_extractor(
+            object_locs, object_features, object_locs, object_features, self.is_training)
+
+        propagation_args = (self.inp[:, f], object_features_for_prop, objects, self.is_training,)
 
         posterior_propagated_objects = self.propagation_layer(*propagation_args, is_posterior=True)
         propagated_objects = posterior_propagated_objects
@@ -244,15 +246,14 @@ class InterpretableSequentialSpair(VideoNetwork):
 
         # TODO: also take into account the global hidden state.
 
-        obj_center_y = propagated_objects.yt + propagated_objects.ys / 2
-        obj_center_x = propagated_objects.xt + propagated_objects.xs / 2
-        object_locs = tf.concat([obj_center_y, obj_center_x], axis=2)
-        propagated_object_features = apply_object_wise(
-            self.discovery_obj_transform, propagated_objects.all, self.n_hidden, self.is_training)
-        propagated_object_features = self.discovery_feature_extractor(
-            propagated_object_features, object_locs, self.grid_cell_centers, self.is_training)
-        propagated_object_features = tf.reshape(
-            propagated_object_features, (self.batch_size, self.H, self.W, self.n_hidden))
+        object_locs = propagated_objects.all[..., :2]
+        object_features = propagated_objects.all[..., 2:]
+
+        object_features_for_disc = self.discovery_feature_extractor(
+            object_locs, object_features, self.grid_cell_centers, None, self.is_training)
+
+        object_features_for_disc = tf.reshape(
+            object_features_for_disc, (self.batch_size, self.H, self.W, self.n_hidden))
 
         # if self.learn_prior:
         #     dummy_backbone_output = tf.zeros_like(self.backbone_output[:, f])
@@ -280,9 +281,9 @@ class InterpretableSequentialSpair(VideoNetwork):
 
         # --- discovery ---
 
-        is_posterior_tf = tf.ones_like(propagated_object_features[..., 0:2]) * [1, 0]
+        is_posterior_tf = tf.ones_like(object_features_for_disc[..., 0:2]) * [1, 0]
         posterior_features_inp = tf.concat(
-            [propagated_object_features, self.backbone_output[:, f], is_posterior_tf], axis=-1)
+            [object_features_for_disc, self.backbone_output[:, f], is_posterior_tf], axis=-1)
 
         posterior_discovery_features = self.discovery_feature_fuser(
             posterior_features_inp, self.B*self.n_backbone_features, self.is_training)
@@ -300,7 +301,7 @@ class InterpretableSequentialSpair(VideoNetwork):
         discovery_mask = tf.cast(discovery_mask_dist.sample(), tf.float32)
         do_mask = self.float_is_training * tf.cast(f > 0, tf.float32)
         discovery_mask = do_mask * discovery_mask + (1 - do_mask) * tf.ones(self.batch_size)
-        discovery_mask = discovery_mask[:, None, None, None, None]
+        discovery_mask = discovery_mask[:, None, None]
 
         posterior_discovered_objects.obj = discovery_mask * posterior_discovered_objects.obj
         posterior_discovered_objects.render_obj = discovery_mask * posterior_discovered_objects.render_obj
@@ -396,8 +397,6 @@ class InterpretableSequentialSpair(VideoNetwork):
 
         self.maybe_build_subnet("backbone")
         self.maybe_build_subnet("discovery_feature_fuser")
-        self.maybe_build_subnet("discovery_obj_transform", builder=self.build_mlp)
-        self.maybe_build_subnet("propagation_obj_transform", builder=self.build_mlp)
 
         self.B = self.n_objects_per_cell
 
@@ -419,31 +418,25 @@ class InterpretableSequentialSpair(VideoNetwork):
             self.object_renderer = ObjectRenderer(scope="renderer")
 
         if self.discovery_feature_extractor is None:
-            self.discovery_feature_extractor = SpatialAttentionLayer(
-                kernel_std=0.3,
+            self.discovery_feature_extractor = SpatialAttentionLayerV2(
                 n_hidden=self.n_hidden,
-                p_dropout=0.0,
                 build_mlp=lambda scope: MLP(n_units=[self.n_hidden, self.n_hidden], scope=scope),
-                build_object_wise=None,
                 do_object_wise=False,
+                scope="discovery_feature_extractor",
             )
 
         if self.propagation_feature_extractor is None:
-            self.propagation_feature_extractor = AttentionLayer(
-                key_dim=self.n_hidden,
-                value_dim=self.n_hidden,
-                n_heads=1,
-                p_dropout=0.0,
-                build_mlp=lambda scope: MLP(n_units=[self.n_hidden, self.n_hidden], scope=scope),
-                build_object_wise=None,
-                do_object_wise=False,
+            self.propagation_feature_extractor = SpatialAttentionLayerV2(
                 n_hidden=self.n_hidden,
+                build_mlp=lambda scope: MLP(n_units=[self.n_hidden, self.n_hidden], scope=scope),
+                do_object_wise=True,
+                scope="propagation_feature_extractor",
             )
 
-        # centers of the grid cells in (0, 1) space.
+        # centers of the grid cells in normalized (anchor box) space.
 
-        y = (np.arange(H, dtype='f') + 0.5) / H
-        x = (np.arange(W, dtype='f') + 0.5) / W
+        y = (np.arange(H, dtype='f') + 0.5) / H * (self.image_height / self.anchor_box[0])
+        x = (np.arange(W, dtype='f') + 0.5) / W * (self.image_width / self.anchor_box[1])
         x, y = np.meshgrid(x, y)
         self.grid_cell_centers = tf.constant(np.concatenate([y.flatten()[:, None], x.flatten()[:, None]], axis=1))
 
@@ -663,9 +656,10 @@ class ISSPAIR_RenderHook(RenderHook):
 
         for mode in modes.split():
             for kind in "disc prop select".split():
-                yt, xt, ys, xs = np.split(fetched[mode][kind], 4, axis=-1)
-                fetched[mode][kind].pixel_space_box = coords_to_pixel_space(
-                    yt, xt, ys, xs, (image_height, image_width), cfg.anchor_box, top_left=True)
+                yt, xt, ys, xs = np.split(fetched[mode][kind].normalized_box, 4, axis=-1)
+                pixel_space_box = coords_to_pixel_space(
+                    yt, xt, ys, xs, (image_height, image_width), updater.network.anchor_box, top_left=True)
+                fetched[mode][kind].pixel_space_box = np.concatenate(pixel_space_box, axis=-1)
 
             output = fetched[mode].render.output
             fetched[mode].render.diff = self.normalize_images(np.abs(inp - output).mean(axis=-1, keepdims=True))
@@ -712,7 +706,9 @@ class ISSPAIR_RenderHook(RenderHook):
         H, W, B = updater.network.H, updater.network.W, updater.network.B
 
         fig_unit_size = 3
-        fig_width = 2 * 3 * W + 1 if updater.network.learn_prior else 3 * W
+        n_other_plots = 10
+        fig_half_width = max(3*W, n_other_plots)
+        fig_width = 2 * fig_half_width + 1 if updater.network.learn_prior else fig_half_width
         n_prop_objects = updater.network.propagation_layer.n_propagated_objects
         n_prop_rows = int(np.ceil(n_prop_objects / W))
         fig_height = B * H + 4 + 2*n_prop_rows + 2
@@ -734,7 +730,7 @@ class ISSPAIR_RenderHook(RenderHook):
 
             posterior_other_axes = []
             for i in range(2):
-                for j in range(int(3*W/2)):
+                for j in range(int(fig_half_width/2)):
                     start_y = B*H + 2*i
                     end_y = start_y + 2
                     start_x = 2*j
@@ -754,18 +750,18 @@ class ISSPAIR_RenderHook(RenderHook):
             ]
 
             if updater.network.learn_prior:
-                prior_disc_axes = np.array([[fig.add_subplot(gs[i, 3*W + 1 + j]) for j in range(3*W)] for i in range(B*H)])
-                prior_prop_axes = np.array([[fig.add_subplot(gs[B*H+4+i, 3*W + 1 + j]) for j in range(3*W)] for i in range(n_prop_rows)])
+                prior_disc_axes = np.array([[fig.add_subplot(gs[i, fig_half_width + 1 + j]) for j in range(3*W)] for i in range(B*H)])
+                prior_prop_axes = np.array([[fig.add_subplot(gs[B*H+4+i, fig_half_width + 1 + j]) for j in range(3*W)] for i in range(n_prop_rows)])
                 prior_prop_axes = prior_prop_axes.flatten()
-                prior_select_axes = np.array([[fig.add_subplot(gs[B*H+4+n_prop_rows+i, 3*W + 1 + j]) for j in range(3*W)] for i in range(n_prop_rows)])
+                prior_select_axes = np.array([[fig.add_subplot(gs[B*H+4+n_prop_rows+i, fig_half_width + 1 + j]) for j in range(3*W)] for i in range(n_prop_rows)])
                 prior_select_axes = prior_select_axes.flatten()
 
                 prior_other_axes = []
                 for i in range(2):
-                    for j in range(int(3*W/2)):
+                    for j in range(int(fig_half_width/2)):
                         start_y = B*H + 2*i
                         end_y = start_y + 2
-                        start_x = 3*W + 1 + 2*j
+                        start_x = fig_half_width + 1 + 2*j
                         end_x = start_x + 2
                         ax = fig.add_subplot(gs[start_y:end_y, start_x:end_x])
                         prior_other_axes.append(ax)
@@ -840,22 +836,22 @@ class ISSPAIR_RenderHook(RenderHook):
                     # --- disc objects ---
 
                     for h, w, b in product(range(H), range(W), range(B)):
-                        obj = _fetched.disc.obj[idx, t, h, w, b, 0]
-                        render_obj = _fetched.disc.render_obj[idx, t, h, w, b, 0]
-                        z = _fetched.disc.z[idx, t, h, w, b, 0]
+                        obj = _fetched.disc.obj[idx, t, obj_idx, 0]
+                        render_obj = _fetched.disc.render_obj[idx, t, obj_idx, 0]
+                        z = _fetched.disc.z[idx, t, obj_idx, 0]
 
                         ax = disc_axes[h * B + b, 3 * w]
 
                         color = obj * self.on_color + (1-obj) * self.off_color
 
-                        self.imshow(ax, _fetched.disc.glimpse[idx, t, h, w, b, :, :, :])
+                        self.imshow(ax, _fetched.disc.glimpse[idx, t, obj_idx, :, :, :])
 
                         obj_rect = patches.Rectangle(
                             (1., 0), 0.2, 1, clip_on=False, transform=ax.transAxes, facecolor=color)
                         ax.add_patch(obj_rect)
 
                         ax = disc_axes[h * B + b, 3 * w + 1]
-                        self.imshow(ax, _fetched.disc.appearance[idx, t, h, w, b, :, :, :3])
+                        self.imshow(ax, _fetched.disc.appearance[idx, t, obj_idx, :, :, :3])
 
                         fw = final_weights[n_prop_objects + obj_idx]
 
@@ -864,13 +860,13 @@ class ISSPAIR_RenderHook(RenderHook):
                             (1., 0), 0.2, 1, clip_on=False, transform=ax.transAxes, facecolor=color)
                         ax.add_patch(obj_rect)
 
-                        yt, xt, ys, xs = _fetched.disc.normalized_box[idx, t, h, w, b]
+                        yt, xt, ys, xs = _fetched.disc.normalized_box[idx, t, obj_idx]
 
                         nbox = "bx={:.2f},{:.2f},{:.2f},{:.2f}".format(yt, xt, ys, xs)
                         ax.set_title(flt(nbox, obj=obj, robj=render_obj, z=z, final_weight=fw))
 
                         ax = disc_axes[h * B + b, 3 * w + 2]
-                        self.imshow(ax, _fetched.disc.appearance[idx, t, h, w, b, :, :, 3], cmap="gray")
+                        self.imshow(ax, _fetched.disc.appearance[idx, t, obj_idx, :, :, 3], cmap="gray")
 
                         obj_idx += 1
 

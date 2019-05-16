@@ -155,6 +155,14 @@ env_configs = dict(
     )
 )
 
+env_configs["small_moving_mnist"] = env_configs["moving_mnist"].copy(
+    image_shape=(36, 36),
+    tile_shape=(36, 36),
+    n_frames=3,
+    min_digits=1,
+    max_digits=2,
+)
+
 env_configs["big_moving_mnist"] = env_configs["moving_mnist"].copy(
     image_shape=(96, 96),
     tile_shape=(48, 48),
@@ -430,6 +438,7 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     n_propagated_objects=16,
     build_mlp=lambda scope: MLP(n_units=[64, 64], scope=scope),
     n_hidden=64,
+    kernel_std=0.1,
 
     d_yx_prior_mean=0.0,
     d_yx_prior_std=1.0,
@@ -461,8 +470,24 @@ alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
     stage_steps=50000,
 )
 
-alg_configs["load_isspair"] = alg_configs["isspair"].copy(
-    render_hook=ISSPAIR_RenderHook(),
+alg_configs["load_small_isspair"] = alg_configs["exp_isspair"].copy(
+    render_hook=ISSPAIR_RenderHook(N=16),
+    load_path="/media/data/dps_data/local_experiments/test-spair-video_env=small-moving-mnist/exp_alg=exp-isspair_2019_05_16_00_28_54_seed=30001/weights/best_of_stage_0",
+    n_train=32,
+    n_val=32,
+    noisy=False,
+    do_train=False,
+    n_frames=3,
+    initial_n_frames=3,
+    n_propagated_objects=4,
+
+    image_shape=(72, 72),
+    tile_shape=(36, 36),
+    min_digits=1,
+    max_digits=2,
+)
+
+alg_configs["load_isspair"] = alg_configs["exp_isspair"].copy(
     load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=exp-isspair_2019_05_09_09_34_52_seed=893541943/weights/best_of_stage_0",
     # load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=isspair_seed=9239644_2019_05_07_08_49_23/weights/best_of_stage_0",
     n_train=4,
@@ -470,11 +495,7 @@ alg_configs["load_isspair"] = alg_configs["isspair"].copy(
     noisy=False,
     do_train=False,
     n_frames=4,
-    d_attr_prior_std=0.1,
-    d_yx_prior_std=0.3,
-    d_hw_prior_std=0.1,
-    where_t_scale=1.0,
-    where_s_scale=1.0,
+    initial_n_frames=4,
 )
 
 alg_configs["test_isspair"] = alg_configs["isspair"].copy(
