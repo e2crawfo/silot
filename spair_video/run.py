@@ -310,8 +310,14 @@ alg_configs = dict(
         stopping_criteria="AP,max",
         threshold=1.0,
 
+        RecurrentGridConvNet=dict(
+            bidirectional=False,
+            # build_cell=lambda n_hidden, scope: CompositeCell(
+            #     tf.contrib.rnn.GRUBlockCellV2(n_hidden),
+            #     MLP(n_units=[n_hidden], scope="GRU"), n_hidden),
+            build_cell=None,
+        ),
         build_backbone=lambda scope: RecurrentGridConvNet(
-            bidirectional=True,
             layers=[
                 dict(filters=128, kernel_size=4, strides=3),
                 dict(filters=128, kernel_size=4, strides=2),
@@ -320,9 +326,6 @@ alg_configs = dict(
                 dict(filters=128, kernel_size=1, strides=1),
                 dict(filters=128, kernel_size=1, strides=1),
             ],
-            build_cell=lambda n_hidden, scope: CompositeCell(
-                tf.contrib.rnn.GRUBlockCellV2(n_hidden),
-                MLP(n_units=[n_hidden], scope="GRU"), n_hidden),
             scope=scope,
         ),
         build_feature_fuser=lambda scope: ConvNet(
@@ -462,7 +465,7 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
 )
 
 alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
-    d_attr_prior_std=0.1,
+    d_attr_prior_std=0.4,
     d_yx_prior_std=0.3,
     d_hw_prior_std=0.1,
     where_t_scale=1.0,

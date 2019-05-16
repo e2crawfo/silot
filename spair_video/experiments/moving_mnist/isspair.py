@@ -2,7 +2,7 @@ import numpy as np
 from dps.hyper import run_experiment
 from spair_video.run import basic_config, alg_configs, env_configs
 
-readme = "Running ISSPAIR experiment."
+readme = "Running ISSPAIR experiment on moving_mnist."
 
 distributions = [
     dict(d_attr_prior_std=s) for s in [0.1, 0.2, 0.4, 0.8]
@@ -25,8 +25,9 @@ durations = dict(
     ),
     short=dict(
         max_hosts=1, ppn=ppn, cpp=1, gpu_set=gpu_set, pmem=pmem, project=project,
-        wall_time="120mins", cleanup_time="2mins", slack_time="2mins", n_repeats=1,
+        wall_time="60mins", cleanup_time="2mins", slack_time="2mins", n_repeats=1,
         config=dict(max_steps=100, render_step=25, eval_step=25, display_step=25),
+        distributions=None, copy_locally=True,
     ),
     build=dict(
         max_hosts=1, ppn=1, cpp=1, gpu_set=gpu_set, pmem=pmem, project=project,
@@ -41,6 +42,6 @@ config.update(env_configs['moving_mnist'])
 config.update(alg_configs['exp_isspair'])
 
 run_experiment(
-    "test_isspair", config, "First test of spair_video.",
+    "moving_mnist", config, "spair_video on moving_mnist.",
     distributions=distributions, durations=durations
 )
