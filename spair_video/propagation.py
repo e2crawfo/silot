@@ -2,17 +2,17 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 import sonnet as snt
 from orderedattrdict import AttrDict
-import numpy as np
 
 Normal = tfp.distributions.Normal
 
 from dps import cfg
 from dps.utils import Param
-from dps.utils.tf import tf_shape, apply_object_wise
+from dps.utils.tf import tf_shape, apply_object_wise, MLP
 
 from auto_yolo.tf_ops import resampler_edge
 from auto_yolo.models.core import concrete_binary_pre_sigmoid_sample, concrete_binary_sample_kl, coords_to_image_space
 from auto_yolo.models.object_layer import ObjectLayer
+from auto_yolo.models.networks import SpatialAttentionLayerV2
 
 
 def extract_affine_glimpse(image, object_shape, cyt, cxt, ys, xs):
@@ -59,6 +59,11 @@ class ObjectPropagationLayer(ObjectLayer):
 
     anchor_box = Param()
 
+    do_lateral = Param()
+    n_hidden = Param()
+
+    lateral_network = None
+
     def null_object_set(self, batch_size):
         new_objects = AttrDict(
             normalized_box=tf.zeros((batch_size, self.n_propagated_objects, 4)),
@@ -93,12 +98,20 @@ class ObjectPropagationLayer(ObjectLayer):
 
     def _independent_prior(self):
         return dict(
-            d_yt_logit_dist=Normal(loc=self.d_yx_prior_mean, scale=self.d_yx_prior_std),
-            d_xt_logit_dist=Normal(loc=self.d_yx_prior_mean, scale=self.d_yx_prior_std),
-            d_ys_logit_dist=Normal(loc=self.d_hw_prior_mean, scale=self.d_hw_prior_std),
-            d_xs_logit_dist=Normal(loc=self.d_hw_prior_mean, scale=self.d_hw_prior_std),
-            d_attr_dist=Normal(loc=self.d_attr_prior_mean, scale=self.d_attr_prior_std),
-            d_z_logit_dist=Normal(loc=self.d_z_prior_mean, scale=self.d_z_prior_std),
+            d_yt_logit_mean=self.d_yx_prior_mean,
+            d_xt_logit_mean=self.d_yx_prior_mean,
+            d_ys_logit_mean=self.d_hw_prior_mean,
+            d_xs_logit_mean=self.d_hw_prior_mean,
+            d_attr_mean=self.d_attr_prior_mean,
+            d_z_logit_mean=self.d_z_prior_mean,
+
+            d_yt_logit_std=self.d_yx_prior_std,
+            d_xt_logit_std=self.d_yx_prior_std,
+            d_ys_logit_std=self.d_hw_prior_std,
+            d_xs_logit_std=self.d_hw_prior_std,
+            d_attr_std=self.d_attr_prior_std,
+            d_z_logit_std=self.d_z_prior_std,
+
             d_obj_log_odds=self.d_obj_log_odds_prior,
         )
 
@@ -106,20 +119,27 @@ class ObjectPropagationLayer(ObjectLayer):
         if prior is None:
             prior = self._independent_prior()
 
-        if "d_yt_logit_dist" not in tensors:
-            return dict(
-                d_yt_kl=tf.zeros_like(tensors.d_yt),
-                d_xt_kl=tf.zeros_like(tensors.d_xt),
-                d_ys_kl=tf.zeros_like(tensors.d_ys),
-                d_xs_kl=tf.zeros_like(tensors.d_xs),
-                d_attr_kl=tf.zeros_like(tensors.d_attr),
-                d_z_kl=tf.zeros_like(tensors.d_z),
-            )
+        # if "d_yt_logit_mean" not in tensors:
+        #     return dict(
+        #         d_yt_kl=tf.zeros_like(tensors.d_yt),
+        #         d_xt_kl=tf.zeros_like(tensors.d_xt),
+        #         d_ys_kl=tf.zeros_like(tensors.d_ys),
+        #         d_xs_kl=tf.zeros_like(tensors.d_xs),
+        #         d_attr_kl=tf.zeros_like(tensors.d_attr),
+        #         d_z_kl=tf.zeros_like(tensors.d_z),
+        #     )
 
-        d_yt_kl = tensors["d_yt_logit_dist"].kl_divergence(prior["d_yt_logit_dist"])
-        d_xt_kl = tensors["d_xt_logit_dist"].kl_divergence(prior["d_xt_logit_dist"])
-        d_ys_kl = tensors["d_ys_logit_dist"].kl_divergence(prior["d_ys_logit_dist"])
-        d_xs_kl = tensors["d_xs_logit_dist"].kl_divergence(prior["d_xs_logit_dist"])
+        def normal_kl(name):
+            loc_name = name + "_mean"
+            scale_name = name + "_std"
+            _post = Normal(loc=tensors[loc_name], scale=tensors[scale_name])
+            _prior = Normal(loc=prior[loc_name], scale=prior[scale_name])
+            return _post.kl_divergence(_prior)
+
+        d_yt_kl = normal_kl("d_yt_logit")
+        d_xt_kl = normal_kl("d_xt_logit")
+        d_ys_kl = normal_kl("d_ys_logit")
+        d_xs_kl = normal_kl("d_xs_logit")
 
         if "d_yt" in self.no_gradient:
             d_yt_kl = tf.stop_gradient(d_yt_kl)
@@ -135,14 +155,14 @@ class ObjectPropagationLayer(ObjectLayer):
 
         # --- d_attr ---
 
-        d_attr_kl = tensors["d_attr_dist"].kl_divergence(prior["d_attr_dist"])
+        d_attr_kl = normal_kl("d_attr")
 
         if "d_attr" in self.no_gradient:
             d_attr_kl = tf.stop_gradient(d_attr_kl)
 
         # --- z ---
 
-        d_z_kl = tensors["d_z_logit_dist"].kl_divergence(prior["d_z_logit_dist"])
+        d_z_kl = normal_kl("d_z_logit")
 
         if "d_z" in self.no_gradient:
             d_z_kl = tf.stop_gradient(d_z_kl)
@@ -184,6 +204,14 @@ class ObjectPropagationLayer(ObjectLayer):
         self.maybe_build_subnet("d_z_network", key="d_z", builder=cfg.build_lateral)
         self.maybe_build_subnet("d_obj_network", key="d_obj", builder=cfg.build_lateral)
 
+        if self.do_lateral and self.lateral_network is None:
+            self.lateral_network = SpatialAttentionLayerV2(
+                n_hidden=self.n_hidden,
+                build_mlp=lambda scope: MLP(n_units=[self.n_hidden, self.n_hidden], scope=scope),
+                do_object_wise=True,
+                scope="lateral_network",
+            )
+
         if self.use_glimpse:
             if self.learn_glimpse_prime:
                 self.maybe_build_subnet("glimpse_prime_network", key="glimpse_prime", builder=cfg.build_lateral)
@@ -200,8 +228,63 @@ class ObjectPropagationLayer(ObjectLayer):
             self.is_training = is_training
             self.float_is_training = tf.to_float(is_training)
 
-        batch_size, *obj_leading_shape, _ = tf_shape(features)
-        n_objects = int(np.prod(obj_leading_shape))
+        if self.do_lateral:
+            batch_size, n_objects, _ = tf_shape(features)
+
+            new_objects = []
+
+            for i in range(n_objects):
+                # apply lateral to running objects with the feature vector for
+                # the current object
+
+                _features = features[:, i:i+1, :]
+
+                if i > 0:
+                    normalized_box = tf.concat([o.normalized_box for o in new_objects], axis=1)
+                    attr = tf.concat([o.attr for o in new_objects], axis=1)
+                    z = tf.concat([o.z for o in new_objects], axis=1)
+                    obj = tf.concat([o.obj for o in new_objects], axis=1)
+                    completed_features = tf.concat([normalized_box[:, :, 2:], attr, z, obj], axis=2)
+                    completed_locs = normalized_box[:, :, :2]
+
+                    current_features = tf.concat(
+                        [objects.normalized_box[:, i:i+1, 2:],
+                         objects.attr[:, i:i+1],
+                         objects.z[:, i:i+1],
+                         objects.obj[:, i:i+1]],
+                        axis=2)
+                    current_locs = objects.normalized_box[:, i:i+1, :2]
+
+                    # if i > max_completed_objects:
+                    #     # top_k_indices
+                    #     # squared_distances = tf.reduce_sum((completed_locs - current_locs)**2, axis=2)
+                    #     # _, top_k_indices = tf.nn.top_k(squared_distances, k=max_completed_objects, sorted=False)
+
+                    _features = self.lateral_network(
+                        completed_locs, completed_features,
+                        current_locs, current_features,
+                        is_training)
+
+                _objects = AttrDict(
+                    normalized_box=objects.normalized_box[:, i:i+1],
+                    attr=objects.attr[:, i:i+1],
+                    z=objects.z[:, i:i+1],
+                    obj=objects.obj[:, i:i+1],
+                )
+
+                _new_objects = self._body(inp, _features, _objects, is_posterior)
+                new_objects.append(_new_objects)
+
+            _new_objects = AttrDict()
+            for k in new_objects[0]:
+                _new_objects[k] = tf.concat([no[k] for no in new_objects], axis=1)
+            return _new_objects
+
+        else:
+            return self._body(inp, features, objects, is_posterior)
+
+    def _body(self, inp, features, objects, is_posterior):
+        batch_size, n_objects, _ = tf_shape(features)
 
         new_objects = AttrDict()
 
@@ -249,7 +332,7 @@ class ObjectPropagationLayer(ObjectLayer):
             g_xt = tf.zeros_like(cxt)
             g_ys = tf.zeros_like(ys)
             g_xs = tf.zeros_like(xs)
-            glimpse_prime = tf.zeros((batch_size, *obj_leading_shape, *self.object_shape, self.image_depth))
+            glimpse_prime = tf.zeros((batch_size, n_objects, *self.object_shape, self.image_depth))
 
         new_objects.update(
             g_yt=g_yt,
@@ -282,17 +365,10 @@ class ObjectPropagationLayer(ObjectLayer):
         d_yt_mean, d_xt_mean, d_ys_mean, d_xs_mean = tf.split(d_box_mean, 4, axis=-1)
         d_yt_std, d_xt_std, d_ys_std, d_xs_std = tf.split(d_box_std, 4, axis=-1)
 
-        d_yt_logit_dist = Normal(loc=d_yt_mean, scale=d_yt_std)
-        d_yt_logit = d_yt_logit_dist.sample()
-
-        d_xt_logit_dist = Normal(loc=d_xt_mean, scale=d_xt_std)
-        d_xt_logit = d_xt_logit_dist.sample()
-
-        d_ys_logit_dist = Normal(loc=d_ys_mean, scale=d_ys_std)
-        d_ys_logit = d_ys_logit_dist.sample()
-
-        d_xs_logit_dist = Normal(loc=d_xs_mean, scale=d_xs_std)
-        d_xs_logit = d_xs_logit_dist.sample()
+        d_yt_logit = Normal(loc=d_yt_mean, scale=d_yt_std).sample()
+        d_xt_logit = Normal(loc=d_xt_mean, scale=d_xt_std).sample()
+        d_ys_logit = Normal(loc=d_ys_mean, scale=d_ys_std).sample()
+        d_xs_logit = Normal(loc=d_xs_mean, scale=d_xs_std).sample()
 
         if "d_yt" in self.no_gradient:
             d_yt_logit = tf.stop_gradient(d_yt_logit)
@@ -330,10 +406,15 @@ class ObjectPropagationLayer(ObjectLayer):
 
             glimpse_prime=glimpse_prime,
 
-            d_yt_logit_dist=d_yt_logit_dist,
-            d_xt_logit_dist=d_xt_logit_dist,
-            d_ys_logit_dist=d_ys_logit_dist,
-            d_xs_logit_dist=d_xs_logit_dist,
+            d_yt_logit_mean=d_yt_mean,
+            d_xt_logit_mean=d_xt_mean,
+            d_ys_logit_mean=d_ys_mean,
+            d_xs_logit_mean=d_xs_mean,
+
+            d_yt_logit_std=d_yt_std,
+            d_xt_logit_std=d_xt_std,
+            d_ys_logit_std=d_ys_std,
+            d_xs_logit_std=d_xs_std,
         )
 
         # --- attributes ---
@@ -348,7 +429,7 @@ class ObjectPropagationLayer(ObjectLayer):
             glimpse = extract_affine_glimpse(inp, self.object_shape, _new_cyt, _new_cxt, _new_ys, _new_xs)
 
         else:
-            glimpse = tf.zeros((batch_size, *obj_leading_shape, *self.object_shape, self.image_depth))
+            glimpse = tf.zeros((batch_size, n_objects, *self.object_shape, self.image_depth))
 
         if self.use_glimpse:
             encoded_glimpse = apply_object_wise(
@@ -367,8 +448,7 @@ class ObjectPropagationLayer(ObjectLayer):
         d_attr_mean, d_attr_log_std = tf.split(d_attr_params, 2, axis=-1)
         d_attr_std = self.std_nonlinearity(d_attr_log_std)
 
-        d_attr_dist = Normal(loc=d_attr_mean, scale=d_attr_std)
-        d_attr = d_attr_dist.sample()
+        d_attr = Normal(loc=d_attr_mean, scale=d_attr_std).sample()
 
         # --- apply change in attributes ---
 
@@ -380,7 +460,8 @@ class ObjectPropagationLayer(ObjectLayer):
         new_objects.update(
             attr=new_attr,
             d_attr=d_attr,
-            d_attr_dist=d_attr_dist,
+            d_attr_mean=d_attr_mean,
+            d_attr_std=d_attr_std,
             glimpse=glimpse
         )
 
@@ -397,8 +478,7 @@ class ObjectPropagationLayer(ObjectLayer):
         d_z_mean = self.training_wheels * tf.stop_gradient(d_z_mean) + (1-self.training_wheels) * d_z_mean
         d_z_std = self.training_wheels * tf.stop_gradient(d_z_std) + (1-self.training_wheels) * d_z_std
 
-        d_z_logit_dist = Normal(loc=d_z_mean, scale=d_z_std)
-        d_z_logits = d_z_logit_dist.sample()
+        d_z_logits = Normal(loc=d_z_mean, scale=d_z_std).sample()
 
         if "d_z" in self.no_gradient:
             d_z_logits = tf.stop_gradient(d_z_logits)
@@ -413,7 +493,8 @@ class ObjectPropagationLayer(ObjectLayer):
         new_objects.update(
             z=new_z,
             d_z_logit=d_z_logits,
-            d_z_logit_dist=d_z_logit_dist,
+            d_z_logit_mean=d_z_mean,
+            d_z_logit_std=d_z_std,
         )
 
         # --- obj ---

@@ -95,7 +95,7 @@ basic_config = DEFAULT_CONFIG.copy(
     fixed_values={},
     no_gradient="",
     overwrite_plots=False,
-    render_first=True
+    render_first=False
 )
 
 
@@ -462,11 +462,13 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     stage_steps=None,
     initial_n_frames=2,
     n_frames_scale=2,
+    do_lateral=False,
 )
 
 alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
     d_attr_prior_std=0.4,
     d_yx_prior_std=0.3,
+    # d_hw_prior_mean=-0.1,
     d_hw_prior_std=0.1,
     where_t_scale=1.0,
     where_s_scale=1.0,

@@ -111,19 +111,6 @@ def apply_keys(d, values):
     return new
 
 
-Dist = tfp.distributions.Distribution
-
-
-def expand_distributions(structure):
-    structure = map_structure(
-        lambda d: (
-            {k: v for k, v in d.parameters.items() if isinstance(v, tf.Tensor)}
-            if isinstance(d, Dist) else d
-        ),
-        structure, is_leaf=lambda d: isinstance(d, (tf.Tensor, Dist)))
-    return structure
-
-
 def append_to_tensor_arrays(f, structured, tensor_arrays):
     new_tensor_arrays = []
     for (k, v), ta in zip(sorted(structured.items()), tensor_arrays):
@@ -202,7 +189,6 @@ class InterpretableSequentialSpair(VideoNetwork):
         )
 
         structured_result = self._inner_loop_body(f, objects)
-        structured_result = expand_distributions(structured_result)
         tensor_arrays = append_to_tensor_arrays(f, structured_result, tensor_arrays)
         selected_objects = structured_result.selected_objects
 
@@ -446,8 +432,6 @@ class InterpretableSequentialSpair(VideoNetwork):
         f = tf.constant(0, dtype=tf.int32)
         structure = self._inner_loop_body(f, objects)
 
-        structure = expand_distributions(structure)
-
         tensor_arrays = make_tensor_arrays(structure, self.dynamic_n_frames)
 
         loop_vars = [f, objects.normalized_box, objects.attr, objects.z, objects.obj, objects.all, *tensor_arrays]
@@ -480,25 +464,25 @@ class InterpretableSequentialSpair(VideoNetwork):
         post_prop = self._tensors.posterior.prop
         self.record_tensors(**{"post_prop_{}".format(k): post_prop[k] for k in prop_to_record})
         self.record_tensors(
-            **{"post_prop_{}_std".format(k): v.scale for k, v in post_prop.items() if hasattr(v, 'scale')})
+            **{"post_prop_{}".format(k): v for k, v in post_prop.items() if k.endswith('_std')})
 
         disc_to_record = "cell_y cell_x height width yt xt ys xs z attr obj pred_n_objects".split()
 
         post_disc = self._tensors.posterior.disc
         self.record_tensors(**{"post_disc_{}".format(k): post_disc[k] for k in disc_to_record})
         self.record_tensors(
-            **{"post_disc_{}_std".format(k): v.scale for k, v in post_disc.items() if hasattr(v, 'scale')})
+            **{"post_disc_{}".format(k): v for k, v in post_disc.items() if k.endswith('_std')})
 
         if self.learn_prior:
             prior_prop = self._tensors.prior.prop
             self.record_tensors(**{"prior_prop_{}".format(k): prior_prop[k] for k in prop_to_record})
             self.record_tensors(
-                **{"prior_prop_{}_std".format(k): v.scale for k, v in prior_prop.items() if hasattr(v, 'scale')})
+                **{"prior_prop_{}".format(k): v for k, v in prior_prop.items() if k.endswith('_std')})
 
             prior_disc = self._tensors.prior.disc
             self.record_tensors(**{"prior_disc_{}".format(k): prior_disc[k] for k in disc_to_record})
             self.record_tensors(
-                **{"prior_disc_{}_std".format(k): v.scale for k, v in prior_disc.items() if hasattr(v, 'scale')})
+                **{"prior_disc_{}".format(k): v for k, v in prior_disc.items() if k.endswith('_std')})
 
         # --- losses ---
 
