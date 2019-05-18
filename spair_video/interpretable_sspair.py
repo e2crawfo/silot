@@ -459,7 +459,7 @@ class InterpretableSequentialSpair(VideoNetwork):
         )
 
         prop_to_record = (
-            "yt xt ys xs z attr obj d_yt_logit d_xt_logit d_ys_logit d_xs_logit d_z_logit d_attr d_obj".split())
+            "yt xt ys xs z attr obj d_yt_logit d_xt_logit ys_logit xs_logit d_z_logit d_attr d_obj".split())
 
         post_prop = self._tensors.posterior.prop
         self.record_tensors(**{"post_prop_{}".format(k): post_prop[k] for k in prop_to_record})
@@ -540,10 +540,13 @@ class InterpretableSequentialSpair(VideoNetwork):
                     prop_learned_prior_obj_kl=kl_weight * tf_mean_sum(prop_learned_prior_kl["d_obj_kl"]),
                 )
 
-            if cfg.background_cfg.mode == "learn_and_transform":
-                # Don't multiply by 0.5 here, because there is no learned prior
+            # Don't multiply by 0.5 here, because there is no learned prior
+            if cfg.background_cfg.mode in ("learn_and_transform", "learn"):
                 self.losses.update(
                     bg_attr_kl=self.kl_weight * tf_mean_sum(self._tensors["bg_attr_kl"]),
+                )
+            if cfg.background_cfg.mode == "learn_and_transform":
+                self.losses.update(
                     bg_transform_kl=self.kl_weight * tf_mean_sum(self._tensors["bg_transform_kl"]),
                 )
 
@@ -573,7 +576,7 @@ class ISSPAIR_RenderHook(RenderHook):
 
     def build_fetches(self, updater):
         prop_names = (
-            "d_obj d_xs_logit d_xt_logit d_ys_logit d_yt_logit d_z_logit xs xt ys yt "
+            "d_obj xs_logit d_xt_logit ys_logit d_yt_logit d_z_logit xs xt ys yt "
             "glimpse normalized_box obj glimpse_prime z appearance"
         ).split()
 
@@ -860,8 +863,8 @@ class ISSPAIR_RenderHook(RenderHook):
                         obj = _fetched.prop.obj[idx, t, k, 0]
                         z = _fetched.prop.z[idx, t, k, 0]
                         d_obj = _fetched.prop.d_obj[idx, t, k, 0]
-                        d_xs_logit = _fetched.prop.d_xs_logit[idx, t, k, 0]
-                        d_ys_logit = _fetched.prop.d_ys_logit[idx, t, k, 0]
+                        xs_logit = _fetched.prop.xs_logit[idx, t, k, 0]
+                        ys_logit = _fetched.prop.ys_logit[idx, t, k, 0]
                         d_xt_logit = _fetched.prop.d_xt_logit[idx, t, k, 0]
                         d_yt_logit = _fetched.prop.d_yt_logit[idx, t, k, 0]
                         xs = _fetched.prop.xs[idx, t, k, 0]
@@ -881,7 +884,7 @@ class ISSPAIR_RenderHook(RenderHook):
                         ax = prop_axes[3*k+1]
                         self.imshow(ax, _fetched.prop.appearance[idx, t, k, :, :, :3])
                         nbox = "bx={:.2f},{:.2f},{:.2f},{:.2f}".format(yt, xt, ys, xs)
-                        d_nbox = "dbxl={:.2f},{:.2f},{:.2f},{:.2f}".format(d_yt_logit, d_xt_logit, d_ys_logit, d_xs_logit)
+                        d_nbox = "dbxl={:.2f},{:.2f},{:.2f},{:.2f}".format(d_yt_logit, d_xt_logit, ys_logit, xs_logit)
                         ax.set_title(flt(nbox + ", " + d_nbox, dobj=d_obj, obj=obj, z=z,))
 
                         fw = final_weights[k]

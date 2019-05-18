@@ -7,7 +7,7 @@ from dps.hyper import run_experiment
 from dps.utils import Config
 from dps.datasets.base import VisualArithmeticDataset, Environment
 from dps.datasets.shapes import RandomShapesDataset
-from dps.utils.tf import MLP, CompositeCell, RecurrentGridConvNet, GridConvNet, ConvNet, tf_shape
+from dps.utils.tf import MLP, CompositeCell, RecurrentGridConvNet, ConvNet, IdentityFunction, tf_shape
 from dps.config import DEFAULT_CONFIG
 
 from auto_yolo.models.core import Updater
@@ -17,6 +17,7 @@ from spair_video.tracking_by_animation import TrackingByAnimation, TbaBackbone, 
 from spair_video.seq_air import SQAIR, SQAIRUpdater, SQAIR_RenderHook
 from spair_video.sspair import SequentialSpair, SequentialSpair_RenderHook
 from spair_video.interpretable_sspair import InterpretableSequentialSpair, ISSPAIR_RenderHook
+from spair_video.background_only import BackgroundOnly, BackgroundOnly_RenderHook
 
 
 class MovingMNIST(Environment):
@@ -84,6 +85,10 @@ basic_config = DEFAULT_CONFIG.copy(
     render_step=5000,
     max_steps=np.inf,
 
+    stage_steps=50000,
+    initial_n_frames=2,
+    n_frames_scale=2,
+
     noisy=True,
     train_reconstruction=True,
     train_kl=True,
@@ -130,6 +135,7 @@ env_configs = dict(
         background_colours="",
         background_cfg=dict(mode="colour", colour="black"),
         postprocessing="",
+        patch_speed=5,
     ),
     easy_shapes=Config(
         build_env=MovingShapes,
@@ -148,10 +154,13 @@ env_configs = dict(
 
         n_frames=8,
         backgrounds="",
-        background_colours="black",
-        background_cfg=dict(mode="colour", colour="black"),
+        background_colours="black white gray",
+        background_cfg=dict(mode="learn", A=3),
+        build_background_encoder=lambda scope: MLP(n_units=[64, 64], scope=scope),
+        build_background_decoder=IdentityFunction,
         postprocessing="",
         patch_size_std=0.1,
+        patch_speed=5,
     )
 )
 
@@ -171,27 +180,24 @@ env_configs["big_moving_mnist"] = env_configs["moving_mnist"].copy(
 )
 
 env_configs["mnist_learned_background"] = env_configs["moving_mnist"].copy(
-    background_cfg=dict(
-        mode="learn_and_transform", A=8,
-        bg_shape=(60, 60),
-        build_encoder=lambda scope: BackgroundExtractor(
-            scope=scope,
-            build_cell=lambda n_hidden, scope: tf.contrib.rnn.GRUBlockCellV2(n_hidden, name=scope),
-            layers=[
-                dict(filters=8, kernel_size=4, strides=3),
-                dict(filters=8, kernel_size=4, strides=2),
-                dict(filters=8, kernel_size=4, strides=2),
-            ],
-        ),
-        build_decoder=lambda scope: ConvNet(
-            scope=scope,
-            layers=[
-                dict(filters=8, kernel_size=4, strides=2, transpose=True,),
-                dict(filters=8, kernel_size=4, strides=2, transpose=True,),
-                dict(filters=8, kernel_size=4, strides=3, transpose=True,),
-            ],
-        ),
-    )
+    build_background_encoder=lambda scope: BackgroundExtractor(
+        scope=scope,
+        build_cell=lambda n_hidden, scope: tf.contrib.rnn.GRUBlockCellV2(n_hidden, name=scope),
+        layers=[
+            dict(filters=8, kernel_size=4, strides=3),
+            dict(filters=8, kernel_size=4, strides=2),
+            dict(filters=8, kernel_size=4, strides=2),
+        ],
+    ),
+    build_background_decoder=lambda scope: ConvNet(
+        scope=scope,
+        layers=[
+            dict(filters=8, kernel_size=4, strides=2, transpose=True,),
+            dict(filters=8, kernel_size=4, strides=2, transpose=True,),
+            dict(filters=8, kernel_size=4, strides=3, transpose=True,),
+        ],
+    ),
+    background_cfg=dict(mode="learn_and_transform", A=8, bg_shape=(60, 60))
 )
 
 env_configs["sqair_mnist"] = env_configs["moving_mnist"].copy(
@@ -204,29 +210,17 @@ env_configs["sqair_mnist"] = env_configs["moving_mnist"].copy(
 env_configs["hard_shapes"] = env_configs["easy_shapes"].copy(
     shapes="circle diamond star x plus",
     colours="red green blue cyan magenta yellow",
-    min_shapes=1, max_shapes=5, patch_shape=(21, 21), max_overlap=98,
-    patch_size_std=0.3, patch_speed=10, backgrounds="hard",
-    background_cfg=dict(
-        mode="learn_and_transform", A=16,
-        bg_shape=(120, 120),
-        build_encoder=lambda scope: BackgroundExtractor(
-            scope=scope,
-            build_cell=lambda n_hidden, scope: tf.contrib.rnn.GRUBlockCellV2(n_hidden, name=scope),
-            layers=[
-                dict(filters=8, kernel_size=4, strides=3),
-                dict(filters=8, kernel_size=4, strides=2),
-                dict(filters=8, kernel_size=4, strides=2),
-            ],
-        ),
-        build_decoder=lambda scope: ConvNet(
-            scope=scope,
-            layers=[
-                dict(filters=8, kernel_size=4, strides=2, transpose=True,),
-                dict(filters=8, kernel_size=4, strides=2, transpose=True,),
-                dict(filters=8, kernel_size=4, strides=3, transpose=True,),
-            ],
-        ),
-    )
+    min_shapes=1,
+    max_shapes=4,
+    patch_shape=(14, 14),
+    max_overlap=98,
+)
+
+env_configs["small_shapes"] = env_configs["hard_shapes"].copy(
+    image_shape=(24, 24),
+    tile_shape=(24, 24),
+    patch_shape=(14, 14),
+    background_cfg=dict(bg_shape=(30, 30)),
 )
 
 
@@ -238,6 +232,7 @@ def spair_prepare_func():
             cfg.initial_count_prior_log_odds,
             cfg.final_count_prior_log_odds, cfg.count_prior_decay_steps)
     )
+    cfg.training_wheels = "Exp(1.0, 0.0, decay_rate=0.0, decay_steps={}, staircase=True)".format(cfg.end_training_wheels)
 
 
 class SQAIRWrapper:
@@ -380,12 +375,12 @@ alg_configs = dict(
         alpha_logit_scale=0.1,
         alpha_logit_bias=5.0,
 
-        training_wheels="Exp(1.0, 0.0, decay_rate=0.0, decay_steps=1000, staircase=True)",
+        end_training_wheels=1000,
         count_prior_dist=None,
         noise_schedule="Exp(0.001, 0.0, 1000, 0.1)",
 
         # Found through hyper parameter search
-        hw_prior_mean=np.log(0.1/0.9),
+        hw_prior_mean=float(np.log(0.1/0.9)),
         hw_prior_std=0.5,
         count_prior_decay_steps=1000,
         initial_count_prior_log_odds=1e6,
@@ -425,6 +420,28 @@ alg_configs["test_sspair"] = alg_configs["sspair"].copy(
     build_object_decoder=lambda scope: MLP(n_units=[64, 64], scope=scope),
 )
 
+# --- BG ONLY ---
+
+alg_configs["background_only"] = dict(
+    build_network=BackgroundOnly,
+
+    train_reconstruction=True,
+    reconstruction_weight=1.0,
+
+    train_kl=True,
+    kl_weight=1.0,
+
+    render_hook=BackgroundOnly_RenderHook(N=16),
+
+    attr_prior_mean=1.0,
+    attr_prior_std=1.0,
+    noisy=True,
+    stage_steps=None,
+    initial_n_frames=8,
+    n_frames_scale=1,
+)
+
+
 # --- ISSPAIR ---
 
 alg_configs["isspair"] = alg_configs["sspair"].copy(
@@ -445,8 +462,6 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
 
     d_yx_prior_mean=0.0,
     d_yx_prior_std=1.0,
-    d_hw_prior_mean=0.0,
-    d_hw_prior_std=1.0,
     d_attr_prior_mean=0.0,
     d_attr_prior_std=1.0,
     d_z_prior_mean=0.0,
@@ -459,21 +474,25 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     learn_prior=False,
     where_t_scale=0.2,
     where_s_scale=0.2,
-    stage_steps=None,
     initial_n_frames=2,
     n_frames_scale=2,
     do_lateral=False,
+    glimpse_prime_scale=2.0,
 )
 
 alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
     d_attr_prior_std=0.4,
     d_yx_prior_std=0.3,
-    # d_hw_prior_mean=-0.1,
-    d_hw_prior_std=0.1,
     where_t_scale=1.0,
     where_s_scale=1.0,
-    stage_steps=50000,
 )
+
+alg_configs["shape_isspair"] = alg_configs["exp_isspair"].copy(
+    color_logit_scale=1.0,
+    alpha_logit_scale=1.0,
+    alpha_logit_bias=3.0,
+)
+
 
 alg_configs["load_small_isspair"] = alg_configs["exp_isspair"].copy(
     render_hook=ISSPAIR_RenderHook(N=16),
@@ -501,6 +520,22 @@ alg_configs["load_isspair"] = alg_configs["exp_isspair"].copy(
     do_train=False,
     n_frames=4,
     initial_n_frames=4,
+)
+
+alg_configs["load_big_isspair"] = alg_configs["exp_isspair"].copy(
+    load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=exp-isspair_2019_05_16_20_15_20_seed=23123/weights/best_of_stage_0",
+    render_hook=ISSPAIR_RenderHook(N=16),
+    image_shape=(96, 96),
+    tile_shape=(48, 48),
+    min_digits=40,
+    max_digits=40,
+    n_train=16,
+    n_val=16,
+    noisy=False,
+    do_train=False,
+    n_frames=2,
+    initial_n_frames=2,
+    n_propagated_objects=16*4,
 )
 
 alg_configs["test_isspair"] = alg_configs["isspair"].copy(
@@ -578,50 +613,7 @@ alg_configs['sqair'] = Config(
     training_wheels=0.0,
     mot_eval=False,
     fixed_presence=False,
-
-    stage_steps=50000,
-    initial_n_frames=2,
-    n_frames_scale=2,
     disc_step_bias=5.,
-)
-
-alg_configs['exp_sqair'] = alg_configs['sqair'].copy(
-    disc_prior_type='special',
-    fixed_presence=True,
-    min_digits=2,
-    max_digits=2,
-    n_steps_per_image=2,
-    # min_digits=9,
-    # max_digits=9,
-    # n_steps_per_image=9,
-
-    # patch_shape=(14, 14),
-    # max_digits=5,
-    # n_steps_per_image=5,
-
-
-
-    # masked_glimpse=False,
-    # disc_step_bias=10.,
-    # disc_prior_type='geom',
-    # step_success_prob=0.9999,
-    # transform_var_bias=0.,
-    # output_scale=5.0,
-    # output_std=0.9,
-    # training_wheels="Exp(1.0, 0.0, decay_rate=0.0, decay_steps=100, staircase=True)",
-    # scale_prior=(-3.5, -3.5),
-    # patch_shape=(14, 14),
-    # max_grad_norm=10.0,
-    # build_input_encoder=lambda: SQAIRWrapper(GridConvNet(
-    #     layers=[
-    #         dict(filters=64, kernel_size=4, strides=3),
-    #         dict(filters=64, kernel_size=4, strides=2),
-    #         dict(filters=64, kernel_size=4, strides=2),
-    #         dict(filters=64, kernel_size=1, strides=1),
-    #         dict(filters=64, kernel_size=1, strides=1),
-    #         dict(filters=64, kernel_size=1, strides=1),
-    #     ],
-    # )),
 )
 
 

@@ -218,16 +218,36 @@ class VideoNetwork(TensorRecorder):
                 solid_background = tf.nn.sigmoid(10 * self.solid_background_logits)
                 background = solid_background[None, None, None, :] * tf.ones_like(self.inp)
 
-            elif cfg.background_cfg.mode == "learn_and_transform":
-                if self.background_encoder is None:
-                    self.background_encoder = cfg.background_cfg.build_encoder(scope="background_encoder")
-                    if "background_encoder" in self.fixed_weights:
-                        self.background_encoder.fix_variables()
+            elif cfg.background_cfg.mode == "learn":
+                self.maybe_build_subnet("background_encoder")
+                self.maybe_build_subnet("background_decoder")
 
-                if self.background_decoder is None:
-                    self.background_decoder = cfg.background_cfg.build_decoder(scope="background_decoder")
-                    if "background_decoder" in self.fixed_weights:
-                        self.background_decoder.fix_variables()
+                bg_attr = self.background_encoder(self.inp[:, 0], 2 * cfg.background_cfg.A, self.is_training)
+                bg_attr_mean, bg_attr_log_std = tf.split(bg_attr, 2, axis=-1)
+                bg_attr_std = tf.exp(bg_attr_log_std)
+                if not self.noisy:
+                    bg_attr_std = tf.zeros_like(bg_attr_std)
+
+                bg_attr, bg_attr_kl = normal_vae(bg_attr_mean, bg_attr_std, self.attr_prior_mean, self.attr_prior_std)
+
+                self._tensors.update(
+                    bg_attr_mean=bg_attr_mean,
+                    bg_attr_std=bg_attr_std,
+                    bg_attr_kl=bg_attr_kl,
+                    bg_attr=bg_attr)
+
+                # --- decode ---
+
+                _, T, H, W, _ = tf_shape(self.inp)
+
+                background = self.background_decoder(bg_attr, 3, self.is_training)
+                assert len(background.shape) == 2 and background.shape[1] == 3
+                background = tf.nn.sigmoid(tf.clip_by_value(background, -10, 10))
+                background = tf.tile(background[:, None, None, None, :], (1, T, H, W, 1))
+
+            elif cfg.background_cfg.mode == "learn_and_transform":
+                self.maybe_build_subnet("background_encoder")
+                self.maybe_build_subnet("background_decoder")
 
                 # --- encode ---
 
