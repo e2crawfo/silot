@@ -348,7 +348,6 @@ class SQAIR(VideoNetwork):
 
     sample_from_prior = Param()
     training_wheels = Param()
-    mot_eval = Param()
     k_particles = Param()
 
     # Don't think we need these for this network
@@ -361,9 +360,7 @@ class SQAIR(VideoNetwork):
         ap_iou_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
         self.eval_funcs = {"AP_at_point_{}".format(int(10 * v)): SQAIR_AP(v) for v in ap_iou_values}
         self.eval_funcs["AP"] = SQAIR_AP(ap_iou_values)
-
-        if self.mot_eval:
-            self.eval_funcs["MOT"] = SQAIR_MOTMetrics()
+        self.eval_funcs["MOT"] = SQAIR_MOTMetrics()
 
         self.training_wheels = build_scheduled_value(self.training_wheels, "training_wheels")
         super().__init__(env, updater, scope=scope, **kwargs)

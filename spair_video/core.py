@@ -6,6 +6,7 @@ from tensorflow.python.ops.rnn import dynamic_rnn
 import sonnet as snt
 from orderedattrdict import AttrDict
 import motmetrics as mm
+import time
 
 from dps import cfg
 from dps.utils import Param, animate
@@ -85,6 +86,8 @@ class MOTMetrics:
         mh = mm.metrics.create()
         summary = mh.compute_many(
             accumulators,
+            metrics=['mota'],
+            # metrics=['mota', 'idf1'],
             names=[str(i) for i in range(len(accumulators))],
             generate_overall=True
         )

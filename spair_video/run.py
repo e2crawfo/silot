@@ -62,7 +62,7 @@ basic_config = DEFAULT_CONFIG.copy(
     max_experiments=None,
     preserve_env=False,
     threshold=-np.inf,
-    load_path=-1,
+    load_path=None,
     start_tensorboard=10,
     render_final=False,
 
@@ -81,8 +81,8 @@ basic_config = DEFAULT_CONFIG.copy(
     optimizer_spec="adam",
     max_grad_norm=10.0,
     eval_step=5000,
-    display_step=5000,
-    render_step=5000,
+    display_step=None,
+    render_step=None,
     max_steps=np.inf,
 
     stage_steps=50000,
@@ -100,7 +100,7 @@ basic_config = DEFAULT_CONFIG.copy(
     fixed_values={},
     no_gradient="",
     overwrite_plots=False,
-    render_first=False
+    render_first=False,
 )
 
 
@@ -154,10 +154,12 @@ env_configs = dict(
 
         n_frames=8,
         backgrounds="",
-        background_colours="black white gray",
-        background_cfg=dict(mode="learn", A=3),
-        build_background_encoder=lambda scope: MLP(n_units=[64, 64], scope=scope),
-        build_background_decoder=IdentityFunction,
+        background_colours="",
+        background_cfg=dict(mode="colour", colour="black"),
+        # background_colours="black white gray",
+        # background_cfg=dict(mode="learn", A=3),
+        # build_background_encoder=lambda scope: MLP(n_units=[64, 64], scope=scope),
+        # build_background_decoder=IdentityFunction,
         postprocessing="",
         patch_size_std=0.1,
         patch_speed=5,
@@ -302,7 +304,8 @@ alg_configs = dict(
         prepare_func=spair_prepare_func,
         n_objects_per_cell=1,
 
-        stopping_criteria="AP,max",
+        stopping_criteria="MOT:mota,max",
+        # stopping_criteria="AP,max",
         threshold=1.0,
 
         RecurrentGridConvNet=dict(
@@ -445,7 +448,6 @@ alg_configs["background_only"] = dict(
 # --- ISSPAIR ---
 
 alg_configs["isspair"] = alg_configs["sspair"].copy(
-    mot_eval=False,
     render_hook=ISSPAIR_RenderHook(),
     build_discovery_feature_fuser=lambda scope: ConvNet(
         scope=scope, layers=[
@@ -572,7 +574,8 @@ alg_configs["test_isspair"] = alg_configs["isspair"].copy(
 # --- SQAIR ---
 
 alg_configs['sqair'] = Config(
-    stopping_criteria="AP,max",
+    stopping_criteria="MOT:mota,max",
+    # stopping_criteria="AP,max",
     threshold=1.0,
     get_updater=SQAIRUpdater,
     build_network=SQAIR,
@@ -611,7 +614,6 @@ alg_configs['sqair'] = Config(
     variable_scope_depth=None,
     n_val=992,  # has to be a multiple of the batch size
     training_wheels=0.0,
-    mot_eval=False,
     fixed_presence=False,
     disc_step_bias=5.,
 )
@@ -627,4 +629,5 @@ if __name__ == "__main__":
     config = basic_config.copy()
     run_experiment(
         "test_spair_video", config, "First test of spair_video.",
-        alg_configs=alg_configs, env_configs=env_configs)
+        alg_configs=alg_configs, env_configs=env_configs,
+        check_command_line=True)

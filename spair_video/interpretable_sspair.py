@@ -151,7 +151,6 @@ class InterpretableSequentialSpair(VideoNetwork):
     n_hidden = Param()
     learn_prior = Param()
     discovery_dropout_prob = Param()
-    mot_eval = Param()
     anchor_box = Param()
 
     discovery_layer = None
@@ -168,8 +167,7 @@ class InterpretableSequentialSpair(VideoNetwork):
                 ap_iou_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
                 eval_funcs = {"AP_at_point_{}".format(int(10 * v)): AP(v) for v in ap_iou_values}
                 eval_funcs["AP"] = AP(ap_iou_values)
-                if self.mot_eval:
-                    eval_funcs["MOT"] = MOTMetrics()
+                eval_funcs["MOT"] = MOTMetrics()
                 self._eval_funcs = eval_funcs
             else:
                 self._eval_funcs = {}
