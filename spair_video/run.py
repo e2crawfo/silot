@@ -149,7 +149,7 @@ env_configs = dict(
         max_overlap=14**2/2,
         one_hot=True,
         colours="red green blue cyan magenta yellow",
-        shapes="circle diamond x",
+        shapes="circle diamond star x plus",
         n_distractors_per_image=0,
 
         n_frames=8,
@@ -210,12 +210,8 @@ env_configs["sqair_mnist"] = env_configs["moving_mnist"].copy(
 )
 
 env_configs["hard_shapes"] = env_configs["easy_shapes"].copy(
-    shapes="circle diamond star x plus",
-    colours="red green blue cyan magenta yellow",
-    min_shapes=1,
-    max_shapes=4,
-    patch_shape=(14, 14),
-    max_overlap=98,
+    max_shapes=7,
+    max_overlap=50,
 )
 
 env_configs["small_shapes"] = env_configs["hard_shapes"].copy(
