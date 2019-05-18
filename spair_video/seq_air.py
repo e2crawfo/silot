@@ -8,14 +8,12 @@ import os
 
 import matplotlib.pyplot as plt
 from matplotlib import animation
-import matplotlib.gridspec as gridspec
 import matplotlib.patches as patches
 from matplotlib.colors import to_rgb
 
 from dps import cfg
-from dps.utils import Param, map_structure, Config
-from dps.utils.tf import (
-    build_gradient_train_op, ScopedFunction, build_scheduled_value, FIXED_COLLECTION, tf_shape, RenderHook)
+from dps.utils import Param, Config
+from dps.utils.tf import build_scheduled_value, tf_shape, RenderHook
 from dps.updater import DataManager
 
 from auto_yolo.models.core import AP, Updater as _Updater, Evaluator
@@ -248,7 +246,9 @@ class SQAIRUpdater(_Updater):
         assert not intersection, "Key sets have non-zero intersection: {}".format(intersection)
 
         # --- for rendering and eval ---
-        resampled_names = 'obj_id canvas glimpse presence_prob presence presence_logit where_coords num_steps_per_sample'.split()
+        resampled_names = (
+            'obj_id canvas glimpse presence_prob presence presence_logit '
+            'where_coords num_steps_per_sample'.split())
         for name in resampled_names:
             try:
                 resampled_tensor = self.resample(self.tensors[name], axis=1)
@@ -290,7 +290,7 @@ class SQAIR_AP(AP):
 class SQAIR_MOTMetrics(MOTMetrics):
     keys_accessed = (
         ["resampled_" + name for name in "obj_id where_coords num_steps_per_sample".split()]
-        + "annotations n_annotations".split()
+        + "annotations n_annotations dynamic_n_frames".split()
     )
 
     def _process_data(self, tensors, updater):
@@ -470,7 +470,9 @@ class SQAIR_RenderHook(RenderHook):
     fig_scale = 1.5
 
     def build_fetches(self, updater):
-        resampled_names = 'obj_id canvas glimpse presence_prob presence presence_logit where_coords num_steps_per_sample'.split()
+        resampled_names = (
+            'obj_id canvas glimpse presence_prob presence presence_logit '
+            'where_coords num_steps_per_sample'.split())
         fetches = (
             ["resampled_" + name for name in resampled_names]
         )

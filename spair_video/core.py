@@ -6,20 +6,19 @@ from tensorflow.python.ops.rnn import dynamic_rnn
 import sonnet as snt
 from orderedattrdict import AttrDict
 import motmetrics as mm
-import time
 
 from dps import cfg
 from dps.utils import Param, animate
 from dps.utils.tf import (
     build_scheduled_value, FIXED_COLLECTION, tf_mean_sum, MLP,
-    RenderHook, tf_shape, ConvNet, RecurrentGridConvNet, tf_roll
+    RenderHook, tf_shape, ConvNet, RecurrentGridConvNet,
 )
 
 from auto_yolo.models.core import normal_vae, TensorRecorder, xent_loss, coords_to_pixel_space
 
 
 class MOTMetrics:
-    keys_accessed = "is_new normalized_box obj annotations n_annotations"
+    keys_accessed = "dynamic_n_frames is_new normalized_box obj annotations n_annotations"
 
     def _process_data(self, tensors, updater):
         obj = tensors['obj']
@@ -79,7 +78,7 @@ class MOTMetrics:
                     if obj[b, f, i] > 0.5:
                         pred_boxes.append([top[b, f, i], left[b, f, i], height[b, f, i], width[b, f, i]])
 
-                distances = mm.distances.iou_matrix(gt_boxes, pred_boxes)
+                distances = mm.distances.iou_matrix(gt_boxes, pred_boxes, max_iou=0.5)
                 acc.update(gt_ids, _pred_ids, distances)
             accumulators.append(acc)
 
@@ -173,14 +172,25 @@ class VideoNetwork(TensorRecorder):
                 background=data["background"],
             )
 
+        max_n_frames = tf_shape(inp)[1]
+
         if self.stage_steps is None:
-            self.current_stage = tf.constant(0, tf.float32)
-            self.dynamic_n_frames = tf_shape(inp)[1]
+            self.current_stage = tf.constant(0, tf.int32)
+            dynamic_n_frames = max_n_frames
         else:
             self.current_stage = tf.cast(tf.train.get_or_create_global_step(), tf.int32) // self.stage_steps
-            self.dynamic_n_frames = tf.minimum(
-                self.initial_n_frames + self.n_frames_scale * self.current_stage,
-                tf_shape(inp)[1])
+            dynamic_n_frames = tf.minimum(
+                self.initial_n_frames + self.n_frames_scale * self.current_stage, max_n_frames)
+
+        dynamic_n_frames = tf.cast(dynamic_n_frames, tf.float32)
+        dynamic_n_frames = (
+            self.float_is_training * tf.cast(dynamic_n_frames, tf.float32)
+            + (1-self.float_is_training) * tf.cast(max_n_frames, tf.float32)
+        )
+        self.dynamic_n_frames = tf.cast(dynamic_n_frames, tf.int32)
+
+        self._tensors.current_stage = self.current_stage
+        self._tensors.dynamic_n_frames = self.dynamic_n_frames
 
         self._tensors.inp = self._tensors.inp[:, :self.dynamic_n_frames]
         self._tensors.annotations = self._tensors.annotations[:, :self.dynamic_n_frames]

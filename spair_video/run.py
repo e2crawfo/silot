@@ -306,7 +306,7 @@ alg_configs = dict(
 
         stopping_criteria="MOT:mota,max",
         # stopping_criteria="AP,max",
-        threshold=1.0,
+        threshold=np.inf,
 
         RecurrentGridConvNet=dict(
             bidirectional=False,
@@ -576,7 +576,7 @@ alg_configs["test_isspair"] = alg_configs["isspair"].copy(
 alg_configs['sqair'] = Config(
     stopping_criteria="MOT:mota,max",
     # stopping_criteria="AP,max",
-    threshold=1.0,
+    threshold=np.inf,
     get_updater=SQAIRUpdater,
     build_network=SQAIR,
     render_hook=SQAIR_RenderHook(),
