@@ -16,7 +16,7 @@ late_config = dict(
 
 distributions = []
 n = args.n_digits
-late_config.update(n_digits=n, min_digits=n, max_digits=n, n_steps_per_image=n,)
+late_config.update(n_digits=n, min_digits=n, max_digits=n)
 
 
 readme = "Running ISSPAIR experiment on moving_mnist."

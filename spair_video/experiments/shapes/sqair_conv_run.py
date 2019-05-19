@@ -1,31 +1,12 @@
 from dps.hyper import run_experiment
 from spair_video.run import basic_config, alg_configs, env_configs
 
-import argparse
-parser = argparse.ArgumentParser()
-parser.add_argument('--n-digits', default=0, type=int, choices=[2, 4, 6, 8, 10])
-parser.add_argument('--conv', action='store_true')
-args, _ = parser.parse_known_args()
+distributions = None
+late_config = dict(max_steps=250000)
 
-late_config = dict()
+long_wall_time = "72hours"
 
-distributions = []
-n = args.n_digits
-late_config.update(
-    n_digits=n, min_digits=n, max_digits=n, n_steps_per_image=n, n_objects=n,
-)
-
-wall_time_lookup = {
-    2: "24hours",
-    4: "36hours",
-    6: "50hours",
-    8: "72hours",
-    10: "96hours",
-}
-
-long_wall_time = wall_time_lookup[n]
-
-readme = "Running SQAIR experiment on moving_mnist."
+readme = "Running SQAIR experiment with conv net on hard_shapes."
 
 pmem = 6000
 project = "rpp-bengioy"
@@ -36,7 +17,7 @@ durations = dict(
     long=dict(
         max_hosts=1, ppn=6, cpp=1, gpu_set=gpu_set, pmem=pmem, project=project,
         wall_time=long_wall_time, cleanup_time="5mins", slack_time="5mins", n_repeats=6,
-        copy_locally=True, config=dict(max_steps=250000)
+        copy_locally=True,
     ),
     medium=dict(
         max_hosts=1, ppn=6, cpp=1, gpu_set=gpu_set, pmem=pmem, project=project,
@@ -46,7 +27,7 @@ durations = dict(
     short=dict(
         max_hosts=1, ppn=6, cpp=1, gpu_set=gpu_set, pmem=pmem, project=project,
         wall_time="180mins", cleanup_time="2mins", slack_time="2mins", n_repeats=6,
-        config=dict(max_steps=3000, render_step=500, eval_step=100, display_step=100, stage_steps=600),
+        config=dict(max_steps=3000, eval_step=500, display_step=100, stage_steps=600),
         distributions=None, copy_locally=True,
     ),
     build=dict(
@@ -58,14 +39,12 @@ durations = dict(
 )
 
 config = basic_config.copy()
-config.update(env_configs['moving_mnist'])
-alg_name = 'conv_fixed_sqair' if args.conv else 'fixed_sqair'
-config.update(alg_configs[alg_name])
+config.update(env_configs['hard_shapes'])
+config.update(alg_configs['conv_fixed_sqair'])
 config.update(late_config)
 
 run_experiment(
-    "moving_mnist_sqair",
-    config, "sqair on moving_mnist.",
-    name_variables="n_digits",
+    "hard_shapes_conv_sqair",
+    config, "conv_sqair on hard_shapes.",
     distributions=distributions, durations=durations
 )
