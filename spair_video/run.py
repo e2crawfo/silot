@@ -104,66 +104,38 @@ basic_config = DEFAULT_CONFIG.copy(
 )
 
 
-env_configs = dict(
-    moving_mnist=Config(
-        build_env=MovingMNIST,
+env_configs = dict()
+env_configs['moving_mnist'] = Config(
+    build_env=MovingMNIST,
 
-        n_patch_examples=0,
-        image_shape=(48, 48),
-        tile_shape=(48, 48),
-        patch_shape=(14, 14),
-        object_shape=(14, 14),
-        min_digits=1,
-        max_digits=9,
-        max_overlap=14**2/2,
-        n_classes=82,
-        largest_digit=81,
-        one_hot=True,
-        reductions="sum",
-        characters=list(range(10)),
-        patch_size_std=0.0,
-        colours="white",
-        n_distractors_per_image=0,
+    n_patch_examples=0,
+    image_shape=(48, 48),
+    tile_shape=(48, 48),
+    patch_shape=(14, 14),
+    object_shape=(14, 14),
+    min_digits=1,
+    max_digits=9,
+    max_overlap=14**2/2,
+    n_classes=82,
+    largest_digit=81,
+    one_hot=True,
+    reductions="sum",
+    characters=list(range(10)),
+    patch_size_std=0.0,
+    colours="white",
+    n_distractors_per_image=0,
 
-        train_example_range=(0.0, 0.8),
-        val_example_range=(0.8, 0.9),
-        test_example_range=(0.9, 1.0),
-        digits=list(range(10)),
-        n_frames=8,
+    train_example_range=(0.0, 0.8),
+    val_example_range=(0.8, 0.9),
+    test_example_range=(0.9, 1.0),
+    digits=list(range(10)),
+    n_frames=8,
 
-        backgrounds="",
-        background_colours="",
-        background_cfg=dict(mode="colour", colour="black"),
-        postprocessing="",
-        patch_speed=5,
-    ),
-    easy_shapes=Config(
-        build_env=MovingShapes,
-
-        image_shape=(48, 48),
-        tile_shape=(48, 48),
-        patch_shape=(14, 14),
-        object_shape=(14, 14),
-        min_shapes=1,
-        max_shapes=4,
-        max_overlap=14**2/2,
-        one_hot=True,
-        colours="red green blue cyan magenta yellow",
-        shapes="circle diamond star x plus",
-        n_distractors_per_image=0,
-
-        n_frames=8,
-        backgrounds="",
-        background_colours="",
-        background_cfg=dict(mode="colour", colour="black"),
-        # background_colours="black white gray",
-        # background_cfg=dict(mode="learn", A=3),
-        # build_background_encoder=lambda scope: MLP(n_units=[64, 64], scope=scope),
-        # build_background_decoder=IdentityFunction,
-        postprocessing="",
-        patch_size_std=0.1,
-        patch_speed=5,
-    )
+    backgrounds="",
+    background_colours="",
+    background_cfg=dict(mode="colour", colour="black"),
+    postprocessing="",
+    patch_speed=5,
 )
 
 env_configs["small_moving_mnist"] = env_configs["moving_mnist"].copy(
@@ -209,8 +181,38 @@ env_configs["sqair_mnist"] = env_configs["moving_mnist"].copy(
     colours="",
 )
 
+# --- SHAPES ---
+
+env_configs["easy_shapes"] = Config(
+    build_env=MovingShapes,
+
+    image_shape=(48, 48),
+    tile_shape=(48, 48),
+    patch_shape=(14, 14),
+    object_shape=(14, 14),
+    min_shapes=2,
+    max_shapes=2,
+    n_objects=2,
+
+    max_overlap=14**2/2,
+    one_hot=True,
+    colours="red green blue cyan magenta yellow",
+    shapes="circle diamond star x plus",
+    n_distractors_per_image=0,
+
+    n_frames=8,
+    backgrounds="",
+    background_colours="",
+    background_cfg=dict(mode="colour", colour="black"),
+    postprocessing="",
+    patch_size_std=0.1,
+    patch_speed=5,
+)
+
 env_configs["hard_shapes"] = env_configs["easy_shapes"].copy(
+    min_shapes=7,
     max_shapes=7,
+    n_objects=7,
     max_overlap=50,
 )
 
@@ -220,6 +222,8 @@ env_configs["small_shapes"] = env_configs["hard_shapes"].copy(
     patch_shape=(14, 14),
     background_cfg=dict(bg_shape=(30, 30)),
 )
+
+# --- ALGS ---
 
 
 def spair_prepare_func():
@@ -614,6 +618,16 @@ alg_configs['sqair'] = Config(
     disc_step_bias=5.,
 )
 
+
+def sqair_fixed_prepare_func():
+    from dps import cfg
+    cfg.n_steps_per_image = cfg.n_objects
+
+
+alg_configs['fixed_sqair'] = alg_configs['sqair'].copy(
+    prepare_func=sqair_fixed_prepare_func,
+    fixed_presence=True,
+)
 
 for k, v in env_configs.items():
     v['env_name'] = k
