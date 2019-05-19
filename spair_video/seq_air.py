@@ -398,16 +398,22 @@ class SQAIR(VideoNetwork):
             disc_steps_predictor = partial(
                 StepsPredictor, steps_pred_hidden, self.disc_step_bias, training_wheels=training_wheels)
 
-        # This is the input image encoder. Currently it is an MLP, which results in a huge number of parameters
-        # because we are using color images. Probably want to use a convolutional network instead.
         if cfg.build_input_encoder is None:
             input_encoder = partial(Encoder, layers)
         else:
             input_encoder = cfg.build_input_encoder
 
+        _input_encoder = input_encoder()
+
+        T, B, *rest = tf_shape(processed_image)
+        images = tf.reshape(processed_image, (T*B, *rest))
+        encoded_input = _input_encoder(images)
+        encoded_input = tf.reshape(encoded_input, (T, B, *tf_shape(encoded_input)[1:]))
+
         with tf.variable_scope('discovery'):
-            discover_cell = DiscoveryCore(img_size, self.object_shape, self.n_what, self.rnn_class(self.n_hidden),
-                                          input_encoder, glimpse_encoder, transform_estimator, disc_steps_predictor,
+            discover_cell = DiscoveryCore(encoded_input, img_size, self.object_shape, self.n_what,
+                                          self.rnn_class(self.n_hidden),
+                                          glimpse_encoder, transform_estimator, disc_steps_predictor,
                                           debug=self.debug, training_wheels=training_wheels)
 
             discover = Discover(self.n_steps_per_image, discover_cell,
@@ -418,7 +424,6 @@ class SQAIR(VideoNetwork):
 
         with tf.variable_scope('propagation'):
             # Prop cell should have a different rnn cell but should share all other estimators
-            input_encoder = lambda: discover_cell._input_encoder
             glimpse_encoder = lambda: discover_cell._glimpse_encoder
             transform_estimator = partial(StochasticTransformParam, layers, self.transform_var_bias)
 
@@ -430,8 +435,8 @@ class SQAIR(VideoNetwork):
             # Prop cell should have a different rnn cell but should share all other estimators
             propagate_rnn_cell = self.rnn_class(self.n_hidden)
             temporal_rnn_cell = self.time_rnn_class(self.n_hidden)
-            propagation_cell = PropagationCore(img_size, self.object_shape, self.n_what, propagate_rnn_cell,
-                                               input_encoder, glimpse_encoder, transform_estimator,
+            propagation_cell = PropagationCore(encoded_input, img_size, self.object_shape, self.n_what, propagate_rnn_cell,
+                                               glimpse_encoder, transform_estimator,
                                                prop_steps_predictor, temporal_rnn_cell,
                                                debug=self.debug, training_wheels=training_wheels)
             ssm = SequentialSSM(propagation_cell)

@@ -7,7 +7,7 @@ from dps.hyper import run_experiment
 from dps.utils import Config
 from dps.datasets.base import VisualArithmeticDataset, Environment
 from dps.datasets.shapes import RandomShapesDataset
-from dps.utils.tf import MLP, CompositeCell, RecurrentGridConvNet, ConvNet, IdentityFunction, tf_shape
+from dps.utils.tf import MLP, CompositeCell, GridConvNet, RecurrentGridConvNet, ConvNet, IdentityFunction, tf_shape
 from dps.config import DEFAULT_CONFIG
 
 from auto_yolo.models.core import Updater
@@ -235,17 +235,6 @@ def spair_prepare_func():
             cfg.final_count_prior_log_odds, cfg.count_prior_decay_steps)
     )
     cfg.training_wheels = "Exp(1.0, 0.0, decay_rate=0.0, decay_steps={}, staircase=True)".format(cfg.end_training_wheels)
-
-
-class SQAIRWrapper:
-    def __init__(self, wrapped):
-        self.wrapped = wrapped
-
-    def __call__(self, inp):
-        output = self.wrapped(inp, None, True)[0]
-        batch_size = tf_shape(output)[0]
-        n_trailing = np.prod(tf_shape(output)[1:])
-        return tf.reshape(output, (batch_size, n_trailing))
 
 
 alg_configs = dict(
@@ -628,6 +617,36 @@ alg_configs['fixed_sqair'] = alg_configs['sqair'].copy(
     prepare_func=sqair_fixed_prepare_func,
     fixed_presence=True,
 )
+
+
+class SQAIRWrapper:
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+
+    def __call__(self, inp):
+        output = self.wrapped(inp, None, True)[0]
+        batch_size = tf_shape(output)[0]
+        n_trailing = np.prod(tf_shape(output)[1:])
+        return tf.reshape(output, (batch_size, n_trailing))
+
+
+alg_configs['conv_fixed_sqair'] = alg_configs['fixed_sqair'].copy(
+    build_input_encoder=lambda: SQAIRWrapper(
+        GridConvNet(
+            layers=[
+                dict(filters=128, kernel_size=4, strides=3),
+                dict(filters=128, kernel_size=4, strides=2),
+                dict(filters=128, kernel_size=4, strides=2),
+                dict(filters=128, kernel_size=1, strides=1),
+                dict(filters=128, kernel_size=1, strides=1),
+                dict(filters=128, kernel_size=1, strides=1),
+            ],
+            scope='input_encoder',
+        )
+    ),
+    k_particles=3,
+)
+
 
 for k, v in env_configs.items():
     v['env_name'] = k
