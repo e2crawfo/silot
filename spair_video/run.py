@@ -18,6 +18,7 @@ from spair_video.seq_air import SQAIR, SQAIRUpdater, SQAIR_RenderHook
 from spair_video.sspair import SequentialSpair, SequentialSpair_RenderHook
 from spair_video.interpretable_sspair import InterpretableSequentialSpair, ISSPAIR_RenderHook
 from spair_video.background_only import BackgroundOnly, BackgroundOnly_RenderHook
+from spair_video.baseline import BaselineTracker, Baseline_RenderHook
 
 
 class MovingMNIST(Environment):
@@ -105,6 +106,8 @@ basic_config = DEFAULT_CONFIG.copy(
 
 
 env_configs = dict()
+
+
 env_configs['moving_mnist'] = Config(
     build_env=MovingMNIST,
 
@@ -136,6 +139,14 @@ env_configs['moving_mnist'] = Config(
     background_cfg=dict(mode="colour", colour="black"),
     postprocessing="",
     patch_speed=5,
+
+    annotation_scheme='original',
+)
+
+env_configs['hard_moving_mnist'] = env_configs['moving_mnist'].copy(
+    n_objects=8,
+    min_digits=8,
+    max_digits=8,
 )
 
 env_configs["small_moving_mnist"] = env_configs["moving_mnist"].copy(
@@ -207,6 +218,8 @@ env_configs["easy_shapes"] = Config(
     postprocessing="",
     patch_size_std=0.1,
     patch_speed=5,
+
+    annotation_scheme='original',
 )
 
 env_configs["hard_shapes"] = env_configs["easy_shapes"].copy(
@@ -645,6 +658,25 @@ alg_configs['conv_fixed_sqair'] = alg_configs['fixed_sqair'].copy(
         )
     ),
     k_particles=3,
+)
+
+
+def baseline_prepare_func():
+    from dps import cfg
+    cfg.anchor_box = cfg.tile_shape
+
+
+# --- BASELINE ---
+alg_configs['baseline'] = Config(
+    build_network=BaselineTracker,
+    render_hook=Baseline_RenderHook(N=16),
+    prepare_func=baseline_prepare_func,
+    cc_threshold=0.1,
+    stage_steps=None,
+    initial_n_frames=8,
+    n_frames_scale=1,
+    do_train=False,
+    annotation_scheme='correct',
 )
 
 
