@@ -18,7 +18,7 @@ from auto_yolo.models.core import normal_vae, TensorRecorder, xent_loss, coords_
 
 
 class MOTMetrics:
-    keys_accessed = "dynamic_n_frames is_new normalized_box obj annotations n_annotations"
+    keys_accessed = "is_new normalized_box obj annotations n_annotations"
 
     def _process_data(self, tensors, updater):
         obj = tensors['obj']

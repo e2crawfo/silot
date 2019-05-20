@@ -8,19 +8,12 @@ import matplotlib.patches as patches
 from matplotlib.colors import to_rgb
 
 from dps import cfg
-from dps.utils.tf import build_scheduled_value, ConvNet, RenderHook
+from dps.utils.tf import build_scheduled_value, ConvNet, RenderHook, tf_cosine_similarity
 from dps.utils import Param
 
 from auto_yolo.models.core import xent_loss
 
 from spair_video.core import VideoNetwork
-
-
-def cosine_similarity(a, b, keepdims=False):
-    """ Supports broadcasting. """
-    normalize_a = tf.nn.l2_normalize(a, axis=-1)
-    normalize_b = tf.nn.l2_normalize(b, axis=-1)
-    return tf.reduce_sum(normalize_a * normalize_b, axis=-1, keepdims=keepdims)
 
 
 class TbaBackbone(ConvNet):
@@ -155,7 +148,7 @@ class TrackingByAnimation(VideoNetwork):
                 keys = self.key_network(_hidden_states, self.S+1, self.is_training)
                 keys, temperature_logit = tf.split(keys, [self.S, 1], axis=-1)
                 temperature = 1 + tf.math.softplus(temperature_logit)
-                key_activation = temperature * cosine_similarity(memory, keys[:, None, :])  # (batch_size, H*W)
+                key_activation = temperature * tf_cosine_similarity(memory, keys[:, None, :])  # (batch_size, H*W)
                 normed_key_activation = tf.nn.softmax(key_activation, axis=1)[:, :, None]  # (batch_size, H*W, 1)
                 attention_result = tf.reduce_sum(normed_key_activation * memory, axis=1)  # (batch_size, S)
 

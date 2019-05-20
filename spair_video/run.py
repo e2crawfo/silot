@@ -1,13 +1,14 @@
 import numpy as np
 import tensorflow as tf
 import sonnet as snt
+import itertools
 
 from dps import cfg
 from dps.hyper import run_experiment
 from dps.utils import Config
 from dps.datasets.base import VisualArithmeticDataset, Environment
 from dps.datasets.shapes import RandomShapesDataset
-from dps.utils.tf import MLP, CompositeCell, GridConvNet, RecurrentGridConvNet, ConvNet, IdentityFunction, tf_shape
+from dps.utils.tf import MLP, CompositeCell, GridConvNet, RecurrentGridConvNet, ConvNet, tf_shape, LookupSchedule
 from dps.config import DEFAULT_CONFIG
 
 from auto_yolo.models.core import Updater
@@ -660,23 +661,38 @@ alg_configs['conv_fixed_sqair'] = alg_configs['fixed_sqair'].copy(
     k_particles=3,
 )
 
+# --- BASELINE ---
+
 
 def baseline_prepare_func():
     from dps import cfg
     cfg.anchor_box = cfg.tile_shape
 
 
-# --- BASELINE ---
+n_values = 25
+cc_values = 3 * np.linspace(0, 1, n_values+2)[1:-1]
+# cosine_values = np.linspace(0, 1, n_values+2)[1:-1]
+# cc_values, cosine_values = zip(*itertools.product(cc_values, cosine_values))
+
 alg_configs['baseline'] = Config(
     build_network=BaselineTracker,
     render_hook=Baseline_RenderHook(N=16),
     prepare_func=baseline_prepare_func,
-    cc_threshold=0.1,
     stage_steps=None,
     initial_n_frames=8,
     n_frames_scale=1,
-    do_train=False,
-    annotation_scheme='correct',
+    annotation_scheme='original',
+    stopping_criteria="MOT:mota,max",
+    threshold=np.inf,
+
+    no_gradient=True,
+
+    render_step=0,
+    eval_step=1,
+    cc_threshold=LookupSchedule(cc_values),
+    # cosine_threshold=LookupSchedule(cosine_values),
+    cosine_threshold=None,
+    max_steps=len(cc_values),
 )
 
 
