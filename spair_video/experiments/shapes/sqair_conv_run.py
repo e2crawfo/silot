@@ -4,7 +4,7 @@ from spair_video.run import basic_config, alg_configs, env_configs
 distributions = None
 late_config = dict(max_steps=250000)
 
-long_wall_time = "72hours"
+long_wall_time = "60hours"
 
 readme = "Running SQAIR experiment with conv net on hard_shapes."
 
@@ -44,7 +44,7 @@ config.update(alg_configs['conv_fixed_sqair'])
 config.update(late_config)
 
 run_experiment(
-    "hard_shapes_conv_sqair",
+    "hard_shapes_sqair",
     config, "conv_sqair on hard_shapes.",
     distributions=distributions, durations=durations
 )

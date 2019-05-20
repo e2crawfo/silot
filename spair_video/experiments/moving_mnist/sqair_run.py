@@ -3,13 +3,13 @@ from spair_video.run import basic_config, alg_configs, env_configs
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument('--n-digits', default=0, type=int, choices=[2, 4, 6, 8, 10])
+parser.add_argument('--n-digits', default=0, type=int, choices=[2, 4, 6, 8])
 parser.add_argument('--conv', action='store_true')
 args, _ = parser.parse_known_args()
 
 late_config = dict()
 
-distributions = []
+distributions = None
 n = args.n_digits
 late_config.update(
     n_digits=n, min_digits=n, max_digits=n, n_steps_per_image=n, n_objects=n,
@@ -20,10 +20,19 @@ wall_time_lookup = {
     4: "36hours",
     6: "50hours",
     8: "72hours",
-    10: "96hours",
 }
 
-long_wall_time = wall_time_lookup[n]
+conv_wall_time_lookup = {
+    2: "24hours",
+    4: "36hours",
+    6: "50hours",
+    8: "60hours",
+}
+
+if args.conv:
+    long_wall_time = conv_wall_time_lookup[n]
+else:
+    long_wall_time = wall_time_lookup[n]
 
 readme = "Running SQAIR experiment on moving_mnist."
 

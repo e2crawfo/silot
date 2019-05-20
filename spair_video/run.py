@@ -76,7 +76,7 @@ basic_config = DEFAULT_CONFIG.copy(
     patience=0,
 
     n_train=60000,
-    n_val=1e3,
+    n_val=992,  # has to be a multiple of the batch size for sqair
 
     lr_schedule=1e-4,
     optimizer_spec="adam",
@@ -638,7 +638,6 @@ alg_configs['sqair'] = Config(
     scale_prior=(-2., -2.),
     max_steps=int(2e6),
     variable_scope_depth=None,
-    n_val=992,  # has to be a multiple of the batch size
     training_wheels=0.0,
     fixed_presence=False,
     disc_step_bias=5.,

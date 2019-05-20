@@ -1,4 +1,3 @@
-import numpy as np
 from dps.hyper import run_experiment
 from spair_video.run import basic_config, alg_configs, env_configs
 
@@ -7,46 +6,40 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--n-digits', default=0, type=int, choices=[2, 4, 6, 8, 10])
 args, _ = parser.parse_known_args()
 
-late_config = dict(
-    train_example_range=(0.0, 0.7),
-    val_example_range=(0.7, 0.8),
-    test_example_range=(0.8, 0.9),
-    n_frames=2,
-)
+late_config = dict(max_steps=250000)
 
-distributions = []
+distributions = None
 n = args.n_digits
 late_config.update(n_digits=n, min_digits=n, max_digits=n)
 
-
 readme = "Running ISSPAIR experiment on moving_mnist."
 
-pmem = 16000
+pmem = 15000
 project = "rpp-bengioy"
-ppn = max(len(distributions), 1)
-n_gpus = int(np.ceil(ppn / 4))
+n_gpus = 2
 gpu_set = ",".join(str(i) for i in range(n_gpus))
 
 durations = dict(
     long=dict(
-        max_hosts=1, ppn=ppn, cpp=1, gpu_set=gpu_set, pmem=pmem, project=project,
-        wall_time="24hours", cleanup_time="5mins", slack_time="5mins", n_repeats=1,
+        max_hosts=1, ppn=6, cpp=1, gpu_set=gpu_set, pmem=pmem, project=project,
+        wall_time="96hours", cleanup_time="5mins", slack_time="5mins", n_repeats=6,
+        copy_locally=True, config=dict(max_steps=250000)
     ),
-    medium=dict(
-        max_hosts=1, ppn=ppn, cpp=1, gpu_set=gpu_set, pmem=pmem, project=project,
-        wall_time="12hours", cleanup_time="5mins", slack_time="5mins", n_repeats=1,
+    test_finish=dict(
+        max_hosts=1, ppn=6, cpp=1, gpu_set=gpu_set, pmem=pmem, project=project,
+        wall_time="1hour", cleanup_time="5mins", slack_time="5mins", n_repeats=6,
+        copy_locally=True, config=dict(max_steps=250000)
     ),
     short=dict(
-        max_hosts=1, ppn=ppn, cpp=1, gpu_set=gpu_set, pmem=pmem, project=project,
-        wall_time="120mins", cleanup_time="2mins", slack_time="2mins", n_repeats=1,
-        config=dict(max_steps=100, render_step=25, eval_step=25, display_step=25),
-        distributions=None, copy_locally=True,
+        max_hosts=1, ppn=6, cpp=1, gpu_set=gpu_set, pmem=pmem, project=project,
+        wall_time="180mins", cleanup_time="2mins", slack_time="2mins", n_repeats=6,
+        config=dict(max_steps=3000, render_step=500, eval_step=500, display_step=100, stage_steps=600),
+        copy_locally=True,
     ),
     build=dict(
         max_hosts=1, ppn=1, cpp=1, gpu_set=gpu_set, pmem=pmem, project=project,
         wall_time="120mins", cleanup_time="2mins", slack_time="2mins", n_repeats=1,
         config=dict(do_train=False, render_first=False, render_final=False),
-        distributions=None,
     ),
 )
 
