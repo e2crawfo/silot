@@ -274,7 +274,10 @@ class BaselineTracker(VideoNetwork):
         if "n_annotations" in self._tensors:
             count_1norm = tf.to_float(
                 tf.abs(tf.to_int32(self._tensors["n_objects"]) - self._tensors["n_valid_annotations"]))
+            count_1norm_relative = (
+                count_1norm / tf.maximum(tf.cast(self._tensors["n_valid_annotations"], tf.float32), 1e-6))
             self.record_tensors(
+                count_1norm_relative=count_1norm_relative,
                 count_1norm=count_1norm,
                 count_error=count_1norm > 0.5
             )

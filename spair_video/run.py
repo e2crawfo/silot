@@ -141,7 +141,7 @@ env_configs['moving_mnist'] = Config(
     postprocessing="",
     patch_speed=5,
 
-    annotation_scheme='original',
+    annotation_scheme='correct',
 )
 
 env_configs['hard_moving_mnist'] = env_configs['moving_mnist'].copy(
@@ -220,7 +220,7 @@ env_configs["easy_shapes"] = Config(
     patch_size_std=0.1,
     patch_speed=5,
 
-    annotation_scheme='original',
+    annotation_scheme='correct',
 )
 
 env_configs["hard_shapes"] = env_configs["easy_shapes"].copy(
@@ -681,7 +681,7 @@ alg_configs['baseline'] = Config(
     stage_steps=None,
     initial_n_frames=8,
     n_frames_scale=1,
-    annotation_scheme='original',
+    annotation_scheme='correct',
     stopping_criteria="MOT:mota,max",
     threshold=np.inf,
 
