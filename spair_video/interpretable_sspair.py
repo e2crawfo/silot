@@ -6,6 +6,7 @@ from orderedattrdict import AttrDict
 import pprint
 import shutil
 import os
+import sonnet as snt
 
 import matplotlib.pyplot as plt
 from matplotlib import animation
@@ -19,13 +20,13 @@ from dps.utils.tf import RenderHook, tf_mean_sum, tf_shape, MLP
 
 from auto_yolo.models.core import AP, xent_loss, coords_to_pixel_space
 from auto_yolo.models.object_layer import GridObjectLayer, ObjectRenderer
-from auto_yolo.models.networks import SpatialAttentionLayerV2, apply_object_wise
+from auto_yolo.models.networks import SpatialAttentionLayerV2, DummySpatialAttentionLayer
 
 from spair_video.core import VideoNetwork, MOTMetrics
 from spair_video.propagation import ObjectPropagationLayer
 
 
-def top_k_select_objects(propagated, discovered):
+def select_top_k_objects(propagated, discovered):
     batch_size, *prop_other, final = tf_shape(propagated.obj)
     assert final == 1
     n_prop_objects = np.product(prop_other)
@@ -138,6 +139,7 @@ class InterpretableSequentialSpair(VideoNetwork):
     build_backbone = Param()
     build_discovery_feature_fuser = Param()
     build_mlp = Param()
+    build_prop_cell = Param()
 
     n_backbone_features = Param()
     n_objects_per_cell = Param()
@@ -152,11 +154,13 @@ class InterpretableSequentialSpair(VideoNetwork):
     learn_prior = Param()
     discovery_dropout_prob = Param()
     anchor_box = Param()
+    independent_prop = Param()
 
     discovery_layer = None
     discovery_feature_extractor = None
     propagation_layer = None
     propagation_feature_extractor = None
+    prop_cell = None
 
     object_renderer = None
 
@@ -177,13 +181,14 @@ class InterpretableSequentialSpair(VideoNetwork):
     def _loop_cond(self, f, *_):
         return f < self.dynamic_n_frames
 
-    def _loop_body(self, f, normalized_box, attr, z, obj, _all, *tensor_arrays):
+    def _loop_body(self, f, normalized_box, attr, z, obj, _all, prop_state, *tensor_arrays):
         objects = AttrDict(
             normalized_box=normalized_box,
             attr=attr,
             z=z,
             obj=obj,
             all=_all,
+            prop_state=prop_state,
         )
 
         structured_result = self._inner_loop_body(f, objects)
@@ -199,6 +204,7 @@ class InterpretableSequentialSpair(VideoNetwork):
             selected_objects.z,
             selected_objects.obj,
             selected_objects.all,
+            selected_objects.prop_state,
             *tensor_arrays]
 
     def _inner_loop_body(self, f, objects):
@@ -255,7 +261,7 @@ class InterpretableSequentialSpair(VideoNetwork):
         #     prior_discovered_objects = self.discovery_layer(
         #         self.inp[:, f], prior_discovery_features, self.is_training, is_posterior=False)
 
-        #     prior_selected_objects = top_k_select_objects(prior_propagated_objects, prior_discovered_objects)
+        #     prior_selected_objects = select_top_k_objects(prior_propagated_objects, prior_discovered_objects)
 
         #     prior_render_tensors = self.object_renderer(
         #         prior_selected_objects, self._tensors["background"][:, f], self.is_training)
@@ -276,7 +282,8 @@ class InterpretableSequentialSpair(VideoNetwork):
             posterior_discovery_features, (self.batch_size, self.H, self.W, self.B, self.n_backbone_features))
 
         posterior_discovered_objects = self.discovery_layer(
-            self.inp[:, f], posterior_discovery_features, self.is_training, is_posterior=True)
+            self.inp[:, f], posterior_discovery_features, self.is_training,
+            is_posterior=True, prop_state=self.initial_prop_state)
 
         # --- discovery mask ---
 
@@ -292,7 +299,7 @@ class InterpretableSequentialSpair(VideoNetwork):
 
         # --- object selection ---
 
-        posterior_selected_objects = top_k_select_objects(
+        posterior_selected_objects = select_top_k_objects(
             posterior_propagated_objects, posterior_discovered_objects)
 
         # --- rendering ---
@@ -395,8 +402,14 @@ class InterpretableSequentialSpair(VideoNetwork):
         if self.discovery_layer is None:
             self.discovery_layer = GridObjectLayer(self.pixels_per_cell, scope="discovery")
 
+        if self.prop_cell is None:
+            self.prop_cell = self.build_prop_cell(2*self.n_hidden, name="prop_cell")
+            # self.prop_cell must be a Sonnet RNNCore
+            self.initial_prop_state = snt.trainable_initial_state(
+                1, self.prop_cell.state_size, tf.float32, name="prop_cell_initial_state")
+
         if self.propagation_layer is None:
-            self.propagation_layer = ObjectPropagationLayer(scope="propagation")
+            self.propagation_layer = ObjectPropagationLayer(cell=self.prop_cell, scope="propagation")
 
         if self.object_renderer is None:
             self.object_renderer = ObjectRenderer(scope="renderer")
@@ -410,12 +423,20 @@ class InterpretableSequentialSpair(VideoNetwork):
             )
 
         if self.propagation_feature_extractor is None:
-            self.propagation_feature_extractor = SpatialAttentionLayerV2(
-                n_hidden=self.n_hidden,
-                build_mlp=lambda scope: MLP(n_units=[self.n_hidden, self.n_hidden], scope=scope),
-                do_object_wise=True,
-                scope="propagation_feature_extractor",
-            )
+            if self.independent_prop:
+                self.propagation_feature_extractor = DummySpatialAttentionLayer(
+                    n_hidden=self.n_hidden,
+                    build_mlp=lambda scope: MLP(n_units=[self.n_hidden, self.n_hidden], scope=scope),
+                    do_object_wise=True,
+                    scope="propagation_feature_extractor",
+                )
+            else:
+                self.propagation_feature_extractor = SpatialAttentionLayerV2(
+                    n_hidden=self.n_hidden,
+                    build_mlp=lambda scope: MLP(n_units=[self.n_hidden, self.n_hidden], scope=scope),
+                    do_object_wise=True,
+                    scope="propagation_feature_extractor",
+                )
 
         # centers of the grid cells in normalized (anchor box) space.
 
@@ -432,11 +453,14 @@ class InterpretableSequentialSpair(VideoNetwork):
 
         tensor_arrays = make_tensor_arrays(structure, self.dynamic_n_frames)
 
-        loop_vars = [f, objects.normalized_box, objects.attr, objects.z, objects.obj, objects.all, *tensor_arrays]
+        loop_vars = [
+            f, objects.normalized_box, objects.attr, objects.z, objects.obj, objects.all,
+            objects.prop_state, *tensor_arrays]
 
         result = tf.while_loop(self._loop_cond, self._loop_body, loop_vars)
 
-        tensor_arrays = result[6:]
+        first_ta = min(i for i, ta in enumerate(result) if isinstance(ta, tf.TensorArray))
+        tensor_arrays = result[first_ta:]
 
         tensors = map_structure(lambda ta: ta.stack(), tensor_arrays, is_leaf=lambda t: isinstance(t, tf.TensorArray))
         tensors = map_structure(
@@ -712,9 +736,13 @@ class ISSPAIR_RenderHook(RenderHook):
             gs = gridspec.GridSpec(fig_height, fig_width, figure=fig)
 
             posterior_disc_axes = np.array([[fig.add_subplot(gs[i, j]) for j in range(3*W)] for i in range(B*H)])
-            posterior_prop_axes = np.array([[fig.add_subplot(gs[B*H+4+i, j]) for j in range(3*W)] for i in range(n_prop_rows)])
+            posterior_prop_axes = np.array([
+                [fig.add_subplot(gs[B*H+4+i, j]) for j in range(3*W)]
+                for i in range(n_prop_rows)])
             posterior_prop_axes = posterior_prop_axes.flatten()
-            posterior_select_axes = np.array([[fig.add_subplot(gs[B*H+4+n_prop_rows+i, j]) for j in range(3*W)] for i in range(n_prop_rows)])
+            posterior_select_axes = np.array([
+                [fig.add_subplot(gs[B*H+4+n_prop_rows+i, j]) for j in range(3*W)]
+                for i in range(n_prop_rows)])
             posterior_select_axes = posterior_select_axes.flatten()
 
             posterior_other_axes = []
@@ -739,10 +767,16 @@ class ISSPAIR_RenderHook(RenderHook):
             ]
 
             if updater.network.learn_prior:
-                prior_disc_axes = np.array([[fig.add_subplot(gs[i, fig_half_width + 1 + j]) for j in range(3*W)] for i in range(B*H)])
-                prior_prop_axes = np.array([[fig.add_subplot(gs[B*H+4+i, fig_half_width + 1 + j]) for j in range(3*W)] for i in range(n_prop_rows)])
+                prior_disc_axes = np.array([
+                    [fig.add_subplot(gs[i, fig_half_width + 1 + j])for j in range(3*W)]
+                    for i in range(B*H)])
+                prior_prop_axes = np.array([
+                    [fig.add_subplot(gs[B*H+4+i, fig_half_width + 1 + j]) for j in range(3*W)]
+                    for i in range(n_prop_rows)])
                 prior_prop_axes = prior_prop_axes.flatten()
-                prior_select_axes = np.array([[fig.add_subplot(gs[B*H+4+n_prop_rows+i, fig_half_width + 1 + j]) for j in range(3*W)] for i in range(n_prop_rows)])
+                prior_select_axes = np.array([
+                    [fig.add_subplot(gs[B*H+4+n_prop_rows+i, fig_half_width + 1 + j]) for j in range(3*W)]
+                    for i in range(n_prop_rows)])
                 prior_select_axes = prior_select_axes.flatten()
 
                 prior_other_axes = []

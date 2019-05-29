@@ -1,7 +1,6 @@
 import numpy as np
 import tensorflow as tf
 import sonnet as snt
-import itertools
 
 from dps import cfg
 from dps.hyper import run_experiment
@@ -70,7 +69,7 @@ basic_config = DEFAULT_CONFIG.copy(
 
     curriculum=[dict()],
 
-    batch_size=32,
+    batch_size=16,
     shuffle_buffer_size=1000,
     prefetch_buffer_size_in_batches=100,
     prefetch_to_device=True,
@@ -140,6 +139,7 @@ env_configs['moving_mnist'] = Config(
     background_cfg=dict(mode="colour", colour="black"),
     postprocessing="",
     patch_speed=5,
+    bounce_patches=True,
 
     annotation_scheme='correct',
 )
@@ -148,6 +148,11 @@ env_configs['hard_moving_mnist'] = env_configs['moving_mnist'].copy(
     n_objects=8,
     min_digits=8,
     max_digits=8,
+)
+
+env_configs['moving_mnist_exp'] = env_configs['hard_moving_mnist'].copy(
+    patch_speed=2,
+    bounce_patches=False,
 )
 
 env_configs["small_moving_mnist"] = env_configs["moving_mnist"].copy(
@@ -458,6 +463,7 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
             dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
         ],
     ),
+    build_prop_cell=snt.GRU,
     prior_start_step=-1,
     build_network=InterpretableSequentialSpair,
     n_propagated_objects=16,
@@ -483,6 +489,7 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     n_frames_scale=2,
     do_lateral=False,
     glimpse_prime_scale=2.0,
+    independent_prop=False,
 )
 
 alg_configs["exp_isspair"] = alg_configs["isspair"].copy(

@@ -71,6 +71,10 @@ class ObjectPropagationLayer(ObjectLayer):
 
     lateral_network = None
 
+    def __init__(self, cell, **kwargs):
+        self.cell = cell
+        super().__init__(**kwargs)
+
     def null_object_set(self, batch_size):
         new_objects = AttrDict(
             normalized_box=tf.zeros((batch_size, self.n_propagated_objects, 4)),
@@ -100,6 +104,11 @@ class ObjectPropagationLayer(ObjectLayer):
 
         new_objects.all = tf.concat(
             [new_objects.normalized_box, new_objects.attr, new_objects.z, new_objects.obj], axis=-1)
+
+        new_objects.prop_state = self.cell.initial_state(batch_size*self.n_propagated_objects, tf.float32)
+        trailing_shape = tf_shape(new_objects.prop_state)[1:]
+        new_objects.prop_state = tf.reshape(
+            new_objects.prop_state, (batch_size, self.n_propagated_objects, *trailing_shape))
 
         return new_objects
 
@@ -259,7 +268,8 @@ class ObjectPropagationLayer(ObjectLayer):
 
         if self.use_glimpse and self.learn_glimpse_prime:
             # Do this regardless of is_posterior, otherwise ScopedFunction gets messed up
-            glimpse_prime_params = apply_object_wise(self.glimpse_prime_network, base_features, 4, self.is_training)
+            glimpse_prime_params = apply_object_wise(
+                self.glimpse_prime_network, base_features, output_size=4, is_training=self.is_training)
         else:
             glimpse_prime_params = tf.zeros_like(base_features[..., :4])
 
@@ -304,7 +314,8 @@ class ObjectPropagationLayer(ObjectLayer):
 
         if self.use_glimpse:
             encoded_glimpse_prime = apply_object_wise(
-                self.glimpse_prime_encoder, glimpse_prime, self.A, self.is_training, n_trailing_dims=3)
+                self.glimpse_prime_encoder, glimpse_prime,
+                n_trailing_dims=3, output_size=self.A, is_training=self.is_training)
 
         if not (self.use_glimpse and is_posterior):
             encoded_glimpse_prime = tf.zeros((batch_size, n_objects, self.A), dtype=tf.float32)
@@ -312,7 +323,7 @@ class ObjectPropagationLayer(ObjectLayer):
         # --- predict distribution for d_box ---
 
         d_box_inp = tf.concat([base_features, encoded_glimpse_prime], axis=-1)
-        d_box_params = apply_object_wise(self.d_box_network, d_box_inp, 8, self.is_training)
+        d_box_params = apply_object_wise(self.d_box_network, d_box_inp, output_size=8, is_training=self.is_training)
 
         d_box_mean, d_box_log_std = tf.split(d_box_params, 2, axis=-1)
 
@@ -349,6 +360,8 @@ class ObjectPropagationLayer(ObjectLayer):
         new_ys = float(self.max_hw - self.min_hw) * tf.nn.sigmoid(tf.clip_by_value(ys_logit, -10, 10)) + self.min_hw
         new_xs = float(self.max_hw - self.min_hw) * tf.nn.sigmoid(tf.clip_by_value(xs_logit, -10, 10)) + self.min_hw
 
+        # Used for conditioning...for sake of spatial invariance, we can condition on absoluate scale,
+        # but not on absolute position
         d_box = tf.concat([d_yt_logit, d_xt_logit, new_ys, new_xs], axis=-1)
         new_box = tf.concat([new_cyt, new_cxt, new_ys, new_xs], axis=-1)
 
@@ -393,7 +406,7 @@ class ObjectPropagationLayer(ObjectLayer):
 
         if self.use_glimpse:
             encoded_glimpse = apply_object_wise(
-                self.glimpse_encoder, glimpse, self.A, self.is_training, n_trailing_dims=3)
+                self.glimpse_encoder, glimpse, n_trailing_dims=3, output_size=self.A, is_training=self.is_training)
 
         if not (self.use_glimpse and is_posterior):
             encoded_glimpse = tf.zeros((batch_size, n_objects, self.A), dtype=tf.float32)
@@ -403,7 +416,8 @@ class ObjectPropagationLayer(ObjectLayer):
         # We shouldn't condition on new_box, not spatially invariant
         # d_attr_inp = tf.concat([base_features, new_box, encoded_glimpse], axis=-1)
         d_attr_inp = tf.concat([base_features, d_box, encoded_glimpse], axis=-1)
-        d_attr_params = apply_object_wise(self.d_attr_network, d_attr_inp, 2*self.A, self.is_training)
+        d_attr_params = apply_object_wise(
+            self.d_attr_network, d_attr_inp, output_size=2*self.A, is_training=self.is_training)
 
         d_attr_mean, d_attr_log_std = tf.split(d_attr_params, 2, axis=-1)
         d_attr_std = self.std_nonlinearity(d_attr_log_std)
@@ -427,7 +441,7 @@ class ObjectPropagationLayer(ObjectLayer):
         # We shouldn't condition on new_box, not spatially invariant
         # d_z_inp = tf.concat([base_features, new_box, new_attr, encoded_glimpse], axis=-1)
         d_z_inp = tf.concat([base_features, d_box, new_attr, encoded_glimpse], axis=-1)
-        d_z_params = apply_object_wise(self.d_z_network, d_z_inp, 2, self.is_training)
+        d_z_params = apply_object_wise(self.d_z_network, d_z_inp, output_size=2, is_training=self.is_training)
 
         d_z_mean, d_z_log_std = tf.split(d_z_params, 2, axis=-1)
         d_z_std = self.std_nonlinearity(d_z_log_std)
@@ -453,7 +467,7 @@ class ObjectPropagationLayer(ObjectLayer):
         # We shouldn't condition on new_box, not spatially invariant
         # d_obj_inp = tf.concat([base_features, new_box, new_attr, new_z, encoded_glimpse], axis=-1)
         d_obj_inp = tf.concat([base_features, d_box, new_attr, new_z, encoded_glimpse], axis=-1)
-        d_obj_logits = apply_object_wise(self.d_obj_network, d_obj_inp, 1, self.is_training)
+        d_obj_logits = apply_object_wise(self.d_obj_network, d_obj_inp, output_size=1, is_training=self.is_training)
 
         d_obj_logits = self.training_wheels * tf.stop_gradient(d_obj_logits) + (1-self.training_wheels) * d_obj_logits
         d_obj_log_odds = tf.clip_by_value(d_obj_logits / self.obj_temp, -10., 10.)
@@ -484,5 +498,11 @@ class ObjectPropagationLayer(ObjectLayer):
 
         new_objects.all = tf.concat(
             [new_objects.normalized_box, new_objects.attr, new_objects.z, new_objects.obj], axis=-1)
+
+        # --- update each object's hidden state --
+
+        cell_input = tf.concat([d_box, new_attr, new_z, new_obj], axis=-1)
+
+        _, new_objects.prop_state = apply_object_wise(self.cell, cell_input, objects.prop_state)
 
         return new_objects
