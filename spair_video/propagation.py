@@ -136,7 +136,10 @@ class ObjectPropagationLayer(ObjectLayer):
         )
 
     def compute_kl(self, tensors, prior=None):
+        simple_obj_kl = True
+
         if prior is None:
+            simple_obj_kl = False
             prior = self._independent_prior()
 
         def normal_kl(name):
@@ -152,12 +155,31 @@ class ObjectPropagationLayer(ObjectLayer):
         xs_kl = normal_kl("xs_logit")
         d_attr_kl = normal_kl("d_attr")
         d_z_kl = normal_kl("d_z_logit")
-        d_obj_kl = concrete_binary_sample_kl(
-            tensors["d_obj_pre_sigmoid"],
-            tensors["d_obj_log_odds"], self.obj_concrete_temp,
-            prior["d_obj_log_odds"], self.obj_concrete_temp,
-        )
 
+        if simple_obj_kl:
+            d_obj_kl = concrete_binary_sample_kl(
+                tensors["d_obj_pre_sigmoid"],
+                tensors["d_obj_log_odds"], self.obj_concrete_temp,
+                prior["d_obj_log_odds"], self.obj_concrete_temp,
+            )
+        else:
+            obj_kl = self._compute_obj_kl(tensors)
+
+        """
+        OK, so we need to do obj_kl for discovery and propagation together...but there are a few complications.
+
+        1. For propagation it's a bit complicated...we only want to apply the penalty if the object was already
+           on (or...to the extent that the object was already on?) So how to do this?
+
+           We could make the logit prediction based on the previous timestep.
+
+           Or we could just completely ignore this aspect. Force all objects to be turned off.
+
+           Seems easiest, and probably won't hurt much. Should be easy for the network to turn them off, because if
+           they were off previously it's not going to have any effect downstream, the KL is all that it feeds into.
+
+
+        """
         return dict(
             d_yt_kl=d_yt_kl,
             d_xt_kl=d_xt_kl,
