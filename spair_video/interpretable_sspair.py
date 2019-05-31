@@ -181,11 +181,14 @@ class InterpretableSequentialSpair(VideoNetwork):
     def _loop_cond(self, f, *_):
         return f < self.dynamic_n_frames
 
-    def _loop_body(self, f, normalized_box, attr, z, obj, _all, prop_state, *tensor_arrays):
+    def _loop_body(self, f, normalized_box, attr, z, obj, _all, prop_state, ys_logit, xs_logit, z_logit, *tensor_arrays):
         objects = AttrDict(
             normalized_box=normalized_box,
+            ys_logit=ys_logit,
+            xs_logit=xs_logit,
             attr=attr,
             z=z,
+            z_logit=z_logit,
             obj=obj,
             all=_all,
             prop_state=prop_state,
@@ -205,6 +208,9 @@ class InterpretableSequentialSpair(VideoNetwork):
             selected_objects.obj,
             selected_objects.all,
             selected_objects.prop_state,
+            selected_objects.ys_logit,
+            selected_objects.xs_logit,
+            selected_objects.z_logit,
             *tensor_arrays]
 
     def _inner_loop_body(self, f, objects):
@@ -455,7 +461,7 @@ class InterpretableSequentialSpair(VideoNetwork):
 
         loop_vars = [
             f, objects.normalized_box, objects.attr, objects.z, objects.obj, objects.all,
-            objects.prop_state, *tensor_arrays]
+            objects.prop_state, objects.ys_logit, objects.xs_logit, objects.z_logit, *tensor_arrays]
 
         result = tf.while_loop(self._loop_cond, self._loop_body, loop_vars)
 

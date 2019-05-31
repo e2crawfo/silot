@@ -481,6 +481,7 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
 
     discovery_dropout_prob=0.5,
     learn_glimpse_prime=False,
+    glimpse_prime_scale=2.0,
     use_glimpse=True,
     learn_prior=False,
     where_t_scale=0.2,
@@ -488,7 +489,6 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     initial_n_frames=2,
     n_frames_scale=2,
     do_lateral=False,
-    glimpse_prime_scale=2.0,
     independent_prop=False,
 )
 
@@ -505,6 +505,12 @@ alg_configs["shape_isspair"] = alg_configs["exp_isspair"].copy(
     alpha_logit_bias=3.0,
 )
 
+alg_configs["restart_isspair"] = alg_configs["exp_isspair"].copy(
+    initial_n_frames=6,
+    initial_count_prior_log_odds=0.0125,
+    end_training_wheels=1,
+    noise_schedule=0.0,
+)
 
 alg_configs["load_small_isspair"] = alg_configs["exp_isspair"].copy(
     render_hook=ISSPAIR_RenderHook(N=16),

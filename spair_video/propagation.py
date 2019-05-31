@@ -91,6 +91,9 @@ class ObjectPropagationLayer(ObjectLayer):
             ys=ys,
             xs=xs,
 
+            ys_logit=ys + 0.0,
+            xs_logit=xs + 0.0,
+
             d_yt=yt + 0.0,
             d_xt=xt + 0.0,
             d_ys=ys + 0.0,
@@ -100,6 +103,7 @@ class ObjectPropagationLayer(ObjectLayer):
 
             d_attr=new_objects.attr + 0.0,
             d_z=new_objects.z + 0.0,
+            z_logit=new_objects.z + 0.0,
         )
 
         new_objects.all = tf.concat(
@@ -345,22 +349,16 @@ class ObjectPropagationLayer(ObjectLayer):
 
         # --- scale ---
 
-        original_ys_sigmoid = (ys - self.min_hw) / float(self.max_hw - self.min_hw)
-        original_ys_logit = -tf.log(1. / tf.clip_by_value(original_ys_sigmoid, 1e-6, 1-1e-6) - 1.)
+        new_ys_mean = objects.ys_logit + d_ys
+        new_xs_mean = objects.xs_logit + d_xs
 
-        original_xs_sigmoid = (xs - self.min_hw) / float(self.max_hw - self.min_hw)
-        original_xs_logit = -tf.log(1. / tf.clip_by_value(original_xs_sigmoid, 1e-6, 1-1e-6) - 1.)
+        new_ys_logit = Normal(loc=new_ys_mean, scale=ys_std).sample()
+        new_xs_logit = Normal(loc=new_xs_mean, scale=xs_std).sample()
 
-        new_ys_mean = original_ys_logit + d_ys
-        new_xs_mean = original_xs_logit + d_xs
+        new_ys = float(self.max_hw - self.min_hw) * tf.nn.sigmoid(tf.clip_by_value(new_ys_logit, -10, 10)) + self.min_hw
+        new_xs = float(self.max_hw - self.min_hw) * tf.nn.sigmoid(tf.clip_by_value(new_xs_logit, -10, 10)) + self.min_hw
 
-        ys_logit = Normal(loc=new_ys_mean, scale=ys_std).sample()
-        xs_logit = Normal(loc=new_xs_mean, scale=xs_std).sample()
-
-        new_ys = float(self.max_hw - self.min_hw) * tf.nn.sigmoid(tf.clip_by_value(ys_logit, -10, 10)) + self.min_hw
-        new_xs = float(self.max_hw - self.min_hw) * tf.nn.sigmoid(tf.clip_by_value(xs_logit, -10, 10)) + self.min_hw
-
-        # Used for conditioning...for sake of spatial invariance, we can condition on absoluate scale,
+        # Used for conditioning...for sake of spatial invariance, we can condition on absolute scale,
         # but not on absolute position
         d_box = tf.concat([d_yt_logit, d_xt_logit, new_ys, new_xs], axis=-1)
         new_box = tf.concat([new_cyt, new_cxt, new_ys, new_xs], axis=-1)
@@ -374,8 +372,8 @@ class ObjectPropagationLayer(ObjectLayer):
 
             d_yt_logit=d_yt_logit,
             d_xt_logit=d_xt_logit,
-            ys_logit=ys_logit,
-            xs_logit=xs_logit,
+            ys_logit=new_ys_logit,
+            xs_logit=new_xs_logit,
 
             d_yt_logit_mean=d_yt_mean,
             d_xt_logit_mean=d_xt_mean,
@@ -449,15 +447,15 @@ class ObjectPropagationLayer(ObjectLayer):
         d_z_mean = self.training_wheels * tf.stop_gradient(d_z_mean) + (1-self.training_wheels) * d_z_mean
         d_z_std = self.training_wheels * tf.stop_gradient(d_z_std) + (1-self.training_wheels) * d_z_std
 
-        d_z_logits = Normal(loc=d_z_mean, scale=d_z_std).sample()
+        d_z_logit = Normal(loc=d_z_mean, scale=d_z_std).sample()
 
-        old_z_logits = self.z_nonlinearity_inverse(objects.z)
-        new_z_logits = old_z_logits + d_z_logits
-        new_z = self.z_nonlinearity(new_z_logits)
+        new_z_logit = objects.z_logit + d_z_logit
+        new_z = self.z_nonlinearity(new_z_logit)
 
         new_objects.update(
             z=new_z,
-            d_z_logit=d_z_logits,
+            z_logit=new_z_logit,
+            d_z_logit=d_z_logit,
             d_z_logit_mean=d_z_mean,
             d_z_logit_std=d_z_std,
         )
@@ -467,10 +465,10 @@ class ObjectPropagationLayer(ObjectLayer):
         # We shouldn't condition on new_box, not spatially invariant
         # d_obj_inp = tf.concat([base_features, new_box, new_attr, new_z, encoded_glimpse], axis=-1)
         d_obj_inp = tf.concat([base_features, d_box, new_attr, new_z, encoded_glimpse], axis=-1)
-        d_obj_logits = apply_object_wise(self.d_obj_network, d_obj_inp, output_size=1, is_training=self.is_training)
+        d_obj_logit = apply_object_wise(self.d_obj_network, d_obj_inp, output_size=1, is_training=self.is_training)
 
-        d_obj_logits = self.training_wheels * tf.stop_gradient(d_obj_logits) + (1-self.training_wheels) * d_obj_logits
-        d_obj_log_odds = tf.clip_by_value(d_obj_logits / self.obj_temp, -10., 10.)
+        d_obj_logit = self.training_wheels * tf.stop_gradient(d_obj_logit) + (1-self.training_wheels) * d_obj_logit
+        d_obj_log_odds = tf.clip_by_value(d_obj_logit / self.obj_temp, -10., 10.)
 
         if self.noisy:
             d_obj_pre_sigmoid = concrete_binary_pre_sigmoid_sample(d_obj_log_odds, self.obj_concrete_temp)
