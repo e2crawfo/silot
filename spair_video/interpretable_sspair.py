@@ -217,7 +217,7 @@ class InterpretableSequentialSpair(VideoNetwork):
 
         # --- prop ---
 
-        object_features = objects.all[..., 2:]
+        object_features = tf.concat([objects.all[..., 2:], objects.prop_state], axis=2)
         object_locs = objects.all[..., :2]
 
         object_features_for_prop = self.prop_feature_extractor(
@@ -243,7 +243,7 @@ class InterpretableSequentialSpair(VideoNetwork):
         # TODO: also take into account the global hidden state.
 
         object_locs = prop_objects.all[..., :2]
-        object_features = prop_objects.all[..., 2:]
+        object_features = tf.concat([prop_objects.all[..., 2:], prop_objects.prop_state], axis=2)
 
         object_features_for_disc = self.disc_feature_extractor(
             object_locs, object_features, self.grid_cell_centers, None, self.is_training)
