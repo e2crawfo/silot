@@ -41,7 +41,7 @@ def extract_affine_glimpse(image, object_shape, cyt, cxt, ys, xs):
 
 
 class ObjectPropagationLayer(ObjectLayer):
-    n_propagated_objects = Param()
+    n_prop_objects = Param()
     use_glimpse = Param()
     learn_glimpse_prime = Param()
     where_t_scale = Param()
@@ -77,10 +77,10 @@ class ObjectPropagationLayer(ObjectLayer):
 
     def null_object_set(self, batch_size):
         new_objects = AttrDict(
-            normalized_box=tf.zeros((batch_size, self.n_propagated_objects, 4)),
-            attr=tf.zeros((batch_size, self.n_propagated_objects, self.A)),
-            z=tf.zeros((batch_size, self.n_propagated_objects, 1)),
-            obj=tf.zeros((batch_size, self.n_propagated_objects, 1)),
+            normalized_box=tf.zeros((batch_size, self.n_prop_objects, 4)),
+            attr=tf.zeros((batch_size, self.n_prop_objects, self.A)),
+            z=tf.zeros((batch_size, self.n_prop_objects, 1)),
+            obj=tf.zeros((batch_size, self.n_prop_objects, 1)),
         )
 
         yt, xt, ys, xs = tf.split(new_objects.normalized_box, 4, axis=-1)
@@ -109,10 +109,10 @@ class ObjectPropagationLayer(ObjectLayer):
         new_objects.all = tf.concat(
             [new_objects.normalized_box, new_objects.attr, new_objects.z, new_objects.obj], axis=-1)
 
-        new_objects.prop_state = self.cell.initial_state(batch_size*self.n_propagated_objects, tf.float32)
+        new_objects.prop_state = self.cell.initial_state(batch_size*self.n_prop_objects, tf.float32)
         trailing_shape = tf_shape(new_objects.prop_state)[1:]
         new_objects.prop_state = tf.reshape(
-            new_objects.prop_state, (batch_size, self.n_propagated_objects, *trailing_shape))
+            new_objects.prop_state, (batch_size, self.n_prop_objects, *trailing_shape))
 
         return new_objects
 
@@ -135,11 +135,8 @@ class ObjectPropagationLayer(ObjectLayer):
             d_obj_log_odds=self.d_obj_log_odds_prior,
         )
 
-    def compute_kl(self, tensors, prior=None):
-        simple_obj_kl = True
-
+    def compute_kl(self, tensors, prior=None, do_obj=True):
         if prior is None:
-            simple_obj_kl = False
             prior = self._independent_prior()
 
         def normal_kl(name):
@@ -156,15 +153,6 @@ class ObjectPropagationLayer(ObjectLayer):
         d_attr_kl = normal_kl("d_attr")
         d_z_kl = normal_kl("d_z_logit")
 
-        if simple_obj_kl:
-            d_obj_kl = concrete_binary_sample_kl(
-                tensors["d_obj_pre_sigmoid"],
-                tensors["d_obj_log_odds"], self.obj_concrete_temp,
-                prior["d_obj_log_odds"], self.obj_concrete_temp,
-            )
-        else:
-            obj_kl = self._compute_obj_kl(tensors)
-
         """
         OK, so we need to do obj_kl for discovery and propagation together...but there are a few complications.
 
@@ -178,17 +166,32 @@ class ObjectPropagationLayer(ObjectLayer):
            Seems easiest, and probably won't hurt much. Should be easy for the network to turn them off, because if
            they were off previously it's not going to have any effect downstream, the KL is all that it feeds into.
 
+           Then another question arises...how do we make the network prefere propagating objects rather than discovering
+           new ones? I guess by way of discovery_dropout.
+
 
         """
-        return dict(
+        kl = dict(
             d_yt_kl=d_yt_kl,
             d_xt_kl=d_xt_kl,
             ys_kl=ys_kl,
             xs_kl=xs_kl,
             d_attr_kl=d_attr_kl,
             d_z_kl=d_z_kl,
-            d_obj_kl=d_obj_kl,
         )
+
+        if do_obj:
+            # if simple_obj_kl:
+            #     d_obj_kl = concrete_binary_sample_kl(
+            #         tensors["d_obj_pre_sigmoid"],
+            #         tensors["d_obj_log_odds"], self.obj_concrete_temp,
+            #         prior["d_obj_log_odds"], self.obj_concrete_temp,
+            #     )
+            # else:
+            d_obj_kl = self._compute_obj_kl(tensors)
+            kl['d_obj_kl'] = d_obj_kl
+
+        return kl
 
     def _call(self, inp, features, objects, is_training, is_posterior):
         print("\n" + "-" * 10 + " PropagationLayer(is_posterior={}) ".format(is_posterior) + "-" * 10)

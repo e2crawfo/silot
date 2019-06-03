@@ -466,7 +466,7 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     build_prop_cell=snt.GRU,
     prior_start_step=-1,
     build_network=InterpretableSequentialSpair,
-    n_propagated_objects=16,
+    n_prop_objects=16,
     build_mlp=lambda scope: MLP(n_units=[64, 64], scope=scope),
     n_hidden=64,
     kernel_std=0.1,
@@ -479,7 +479,7 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     d_z_prior_std=1.0,
     d_obj_log_odds_prior=.9 / .1,
 
-    discovery_dropout_prob=0.5,
+    disc_dropout_prob=0.5,
     learn_glimpse_prime=False,
     glimpse_prime_scale=2.0,
     use_glimpse=True,
@@ -497,6 +497,7 @@ alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
     d_yx_prior_std=0.3,
     where_t_scale=1.0,
     where_s_scale=1.0,
+    independent_prop=True,
 )
 
 alg_configs["shape_isspair"] = alg_configs["exp_isspair"].copy(
@@ -521,7 +522,7 @@ alg_configs["load_small_isspair"] = alg_configs["exp_isspair"].copy(
     do_train=False,
     n_frames=3,
     initial_n_frames=3,
-    n_propagated_objects=4,
+    n_prop_objects=4,
 
     image_shape=(72, 72),
     tile_shape=(36, 36),
@@ -553,7 +554,7 @@ alg_configs["load_big_isspair"] = alg_configs["exp_isspair"].copy(
     do_train=False,
     n_frames=2,
     initial_n_frames=2,
-    n_propagated_objects=16*4,
+    n_prop_objects=16*4,
 )
 
 alg_configs["test_isspair"] = alg_configs["isspair"].copy(
@@ -583,7 +584,7 @@ alg_configs["test_isspair"] = alg_configs["isspair"].copy(
     n_backbone_features=32,
     n_passthrough_features=32,
     n_hidden=32,
-    n_propagated_objects=5,
+    n_prop_objects=5,
 )
 
 
