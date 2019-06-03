@@ -477,27 +477,31 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     d_attr_prior_std=1.0,
     d_z_prior_mean=0.0,
     d_z_prior_std=1.0,
-    d_obj_log_odds_prior=.9 / .1,
 
     disc_dropout_prob=0.5,
+
     learn_glimpse_prime=False,
     glimpse_prime_scale=2.0,
     use_glimpse=True,
-    learn_prior=False,
-    where_t_scale=0.2,
-    where_s_scale=0.2,
+
     initial_n_frames=2,
     n_frames_scale=2,
+
+    learn_prior=False,
+    where_t_scale=0.2,
+
     do_lateral=False,
+
     independent_prop=False,
+    gate_d_attr=False,
 )
 
 alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
     d_attr_prior_std=0.4,
     d_yx_prior_std=0.3,
     where_t_scale=1.0,
-    where_s_scale=1.0,
     independent_prop=True,
+    gate_d_attr=True,
 )
 
 alg_configs["shape_isspair"] = alg_configs["exp_isspair"].copy(

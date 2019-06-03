@@ -240,8 +240,6 @@ class InterpretableSequentialSpair(VideoNetwork):
 
         # --- disc, selection and rendering ---
 
-        # TODO: also take into account the global hidden state.
-
         object_locs = prop_objects.all[..., :2]
         object_features = tf.concat([prop_objects.all[..., 2:], prop_objects.prop_state], axis=2)
 
@@ -496,6 +494,7 @@ class InterpretableSequentialSpair(VideoNetwork):
         self.record_tensors(**{"post_prop_{}".format(k): post_prop[k] for k in prop_to_record})
         self.record_tensors(
             **{"post_prop_{}".format(k): v for k, v in post_prop.items() if k.endswith('_std')})
+        self.record_tensors(post_prop_d_attr_gate=post_prop["d_attr_gate"])
 
         disc_to_record = "cell_y cell_x height width yt xt ys xs z attr obj pred_n_objects".split()
 

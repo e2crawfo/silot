@@ -45,7 +45,6 @@ class ObjectPropagationLayer(ObjectLayer):
     use_glimpse = Param()
     learn_glimpse_prime = Param()
     where_t_scale = Param()
-    where_s_scale = Param()
     glimpse_prime_scale = Param()
 
     d_yx_prior_mean = Param()
@@ -58,11 +57,10 @@ class ObjectPropagationLayer(ObjectLayer):
 
     d_attr_prior_mean = Param()
     d_attr_prior_std = Param()
+    gate_d_attr = Param()
 
     d_z_prior_mean = Param()
     d_z_prior_std = Param()
-
-    d_obj_log_odds_prior = Param()
 
     anchor_box = Param()
 
@@ -131,8 +129,6 @@ class ObjectPropagationLayer(ObjectLayer):
             xs_logit_std=self.hw_prior_std,
             d_attr_std=self.d_attr_prior_std,
             d_z_logit_std=self.d_z_prior_std,
-
-            d_obj_log_odds=self.d_obj_log_odds_prior,
         )
 
     def compute_kl(self, tensors, prior=None, do_obj=True):
@@ -153,24 +149,6 @@ class ObjectPropagationLayer(ObjectLayer):
         d_attr_kl = normal_kl("d_attr")
         d_z_kl = normal_kl("d_z_logit")
 
-        """
-        OK, so we need to do obj_kl for discovery and propagation together...but there are a few complications.
-
-        1. For propagation it's a bit complicated...we only want to apply the penalty if the object was already
-           on (or...to the extent that the object was already on?) So how to do this?
-
-           We could make the logit prediction based on the previous timestep.
-
-           Or we could just completely ignore this aspect. Force all objects to be turned off.
-
-           Seems easiest, and probably won't hurt much. Should be easy for the network to turn them off, because if
-           they were off previously it's not going to have any effect downstream, the KL is all that it feeds into.
-
-           Then another question arises...how do we make the network prefere propagating objects rather than discovering
-           new ones? I guess by way of discovery_dropout.
-
-
-        """
         kl = dict(
             d_yt_kl=d_yt_kl,
             d_xt_kl=d_xt_kl,
@@ -181,15 +159,7 @@ class ObjectPropagationLayer(ObjectLayer):
         )
 
         if do_obj:
-            # if simple_obj_kl:
-            #     d_obj_kl = concrete_binary_sample_kl(
-            #         tensors["d_obj_pre_sigmoid"],
-            #         tensors["d_obj_log_odds"], self.obj_concrete_temp,
-            #         prior["d_obj_log_odds"], self.obj_concrete_temp,
-            #     )
-            # else:
-            d_obj_kl = self._compute_obj_kl(tensors)
-            kl['d_obj_kl'] = d_obj_kl
+            kl['d_obj_kl'] = self._compute_obj_kl(tensors)
 
         return kl
 
@@ -308,11 +278,16 @@ class ObjectPropagationLayer(ObjectLayer):
                 # --- obtain final parameters for glimpse prime by modifying current pose ---
                 _yt, _xt, _ys, _xs = tf.split(glimpse_prime_params, 4, axis=-1)
 
-                g_yt = cyt + self.where_t_scale * tf.nn.tanh(_yt)
-                g_xt = cxt + self.where_t_scale * tf.nn.tanh(_xt)
+                # This is how it is done in SQAIR
+                g_yt = cyt + 0.1 * _yt
+                g_xt = cxt + 0.1 * _xt
+                g_ys = ys + 0.1 * _ys
+                g_xs = xs + 0.1 * _xs
 
-                g_ys = ys * (1 + self.where_s_scale * tf.nn.tanh(_ys))
-                g_xs = xs * (1 + self.where_s_scale * tf.nn.tanh(_xs))
+                # g_yt = cyt + self.glimpse_prime_scale * tf.nn.tanh(_yt)
+                # g_xt = cxt + self.glimpse_prime_scale * tf.nn.tanh(_xt)
+                # g_ys = ys + self.glimpse_prime_scale * tf.nn.tanh(_ys)
+                # g_xs = xs + self.glimpse_prime_scale * tf.nn.tanh(_xs)
             else:
                 g_yt = cyt
                 g_xt = cxt
@@ -366,6 +341,9 @@ class ObjectPropagationLayer(ObjectLayer):
 
         # --- position ---
 
+        # We predict position a bit differently from scale. For scale we want to put a prior on the actual value of
+        # the scale, whereas for position we want to put a prior on the difference in position over timesteps.
+
         d_yt_logit = Normal(loc=d_yt_mean, scale=d_yt_std).sample()
         d_xt_logit = Normal(loc=d_xt_mean, scale=d_xt_std).sample()
 
@@ -383,8 +361,8 @@ class ObjectPropagationLayer(ObjectLayer):
         new_ys = float(self.max_hw - self.min_hw) * tf.nn.sigmoid(tf.clip_by_value(new_ys_logit, -10, 10)) + self.min_hw
         new_xs = float(self.max_hw - self.min_hw) * tf.nn.sigmoid(tf.clip_by_value(new_xs_logit, -10, 10)) + self.min_hw
 
-        # Used for conditioning...for sake of spatial invariance, we can condition on absolute scale,
-        # but not on absolute position
+        # Used for conditioning...for sake of spatial invariance,
+        # we can condition on absolute scale, but not on absolute position
         d_box = tf.concat([d_yt_logit, d_xt_logit, new_ys, new_xs], axis=-1)
         new_box = tf.concat([new_cyt, new_cxt, new_ys, new_xs], axis=-1)
 
@@ -440,10 +418,15 @@ class ObjectPropagationLayer(ObjectLayer):
         # d_attr_inp = tf.concat([base_features, new_box, encoded_glimpse], axis=-1)
         d_attr_inp = tf.concat([base_features, d_box, encoded_glimpse], axis=-1)
         d_attr_params = apply_object_wise(
-            self.d_attr_network, d_attr_inp, output_size=2*self.A, is_training=self.is_training)
+            self.d_attr_network, d_attr_inp, output_size=2*self.A+1, is_training=self.is_training)
 
-        d_attr_mean, d_attr_log_std = tf.split(d_attr_params, 2, axis=-1)
+        d_attr_mean, d_attr_log_std, gate_logit = tf.split(d_attr_params, [self.A, self.A, 1], axis=-1)
         d_attr_std = self.std_nonlinearity(d_attr_log_std)
+
+        gate = tf.nn.sigmoid(gate_logit)
+
+        if self.gate_d_attr:
+            d_attr_mean *= gate
 
         d_attr = Normal(loc=d_attr_mean, scale=d_attr_std).sample()
 
@@ -456,7 +439,8 @@ class ObjectPropagationLayer(ObjectLayer):
             d_attr=d_attr,
             d_attr_mean=d_attr_mean,
             d_attr_std=d_attr_std,
-            glimpse=glimpse
+            glimpse=glimpse,
+            d_attr_gate=gate,
         )
 
         # --- z ---
