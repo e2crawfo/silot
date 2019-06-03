@@ -23,7 +23,7 @@ from auto_yolo.models.object_layer import GridObjectLayer, ObjectRenderer
 from auto_yolo.models.networks import SpatialAttentionLayerV2, DummySpatialAttentionLayer
 
 from spair_video.core import VideoNetwork, MOTMetrics
-from spair_video.propagation import ObjectPropagationLayer
+from spair_video.propagation import ObjectPropagationLayer, SQAIRPropagationLayer
 
 
 def select_top_k_objects(prop, disc):
@@ -416,7 +416,8 @@ class InterpretableSequentialSpair(VideoNetwork):
                 1, self.prop_cell.state_size, tf.float32, name="prop_cell_initial_state")
 
         if self.prop_layer is None:
-            self.prop_layer = ObjectPropagationLayer(cell=self.prop_cell, scope="propagation")
+            prop_class = SQAIRPropagationLayer if self.use_sqair_prop else ObjectPropagationLayer
+            self.prop_layer = prop_class(cell=self.prop_cell, scope="propagation")
 
         if self.object_renderer is None:
             self.object_renderer = ObjectRenderer(scope="renderer")
@@ -495,6 +496,11 @@ class InterpretableSequentialSpair(VideoNetwork):
         self.record_tensors(
             **{"post_prop_{}".format(k): v for k, v in post_prop.items() if k.endswith('_std')})
         self.record_tensors(post_prop_d_attr_gate=post_prop["d_attr_gate"])
+
+        if "f_gate" in post_prop:
+            self.record_tensors(post_prop_d_attr_f_gate=post_prop["f_gate"])
+            self.record_tensors(post_prop_d_attr_i_gate=post_prop["i_gate"])
+            self.record_tensors(post_prop_d_attr_t_gate=post_prop["t_gate"])
 
         disc_to_record = "cell_y cell_x height width yt xt ys xs z attr obj pred_n_objects".split()
 

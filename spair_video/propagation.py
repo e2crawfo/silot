@@ -513,3 +513,296 @@ class ObjectPropagationLayer(ObjectLayer):
         _, new_objects.prop_state = apply_object_wise(self.cell, cell_input, objects.prop_state)
 
         return new_objects
+
+
+class SQAIRPropagationLayer(ObjectLayer):
+    """ Reimplementation of SQAIR's propagation system, made to be compatible """
+
+    def _body(self, inp, features, objects, is_posterior):
+        batch_size, n_objects, _ = tf_shape(features)
+
+        new_objects = AttrDict()
+
+        is_posterior_tf = tf.ones_like(features[..., 0:2])
+        if is_posterior:
+            is_posterior_tf = is_posterior_tf * [1, 0]
+        else:
+            is_posterior_tf = is_posterior_tf * [0, 1]
+
+        base_features = tf.concat([features, is_posterior_tf], axis=-1)
+
+        cyt, cxt, ys, xs = tf.split(objects.normalized_box, 4, axis=-1)
+
+        # Do this regardless of is_posterior, otherwise ScopedFunction gets messed up
+        glimpse_dim = self.object_shape[0] * self.object_shape[1]
+        glimpse_prime_params = apply_object_wise(
+            self.glimpse_prime_network, base_features, output_size=4+2*glimpse_dim,
+            is_training=self.is_training)
+
+        glimpse_prime_params, glimpse_prime_mask_logit, glimpse_mask_logit = \
+            tf.split(glimpse_prime_params, [4, glimpse_dim, glimpse_dim], axis=-1)
+
+        if is_posterior:
+            # --- obtain final parameters for glimpse prime by modifying current pose ---
+            _yt, _xt, _ys, _xs = tf.split(glimpse_prime_params, 4, axis=-1)
+
+            # This is how it is done in SQAIR
+            g_yt = cyt + 0.1 * _yt
+            g_xt = cxt + 0.1 * _xt
+            g_ys = ys + 0.1 * _ys
+            g_xs = xs + 0.1 * _xs
+
+            # --- extract glimpse prime ---
+
+            _, image_height, image_width, _ = tf_shape(inp)
+            g_yt, g_xt, g_ys, g_xs = coords_to_image_space(
+                g_yt, g_xt, g_ys, g_xs, (image_height, image_width), self.anchor_box, top_left=False)
+            glimpse_prime = extract_affine_glimpse(inp, self.object_shape, g_yt, g_xt, g_ys, g_xs)
+        else:
+            g_yt = tf.zeros_like(cyt)
+            g_xt = tf.zeros_like(cxt)
+            g_ys = tf.zeros_like(ys)
+            g_xs = tf.zeros_like(xs)
+            glimpse_prime = tf.zeros((batch_size, n_objects, *self.object_shape, self.image_depth))
+
+        glimpse_prime_mask = tf.nn.sigmoid(glimpse_prime_mask_logit)
+        leading_mask_shape = tf_shape(glimpse_prime)[:-1]
+        glimpse_prime_mask = tf.reshape(glimpse_prime_mask, (*leading_mask_shape, 1))
+
+        glimpse_prime *= glimpse_prime_mask
+
+        new_objects.update(
+            g_yt=g_yt,
+            g_xt=g_xt,
+            g_ys=g_ys,
+            g_xs=g_xs,
+            glimpse_prime=glimpse_prime,
+            glimpse_prime_mask=glimpse_prime_mask,
+        )
+
+        # --- encode glimpse ---
+
+        encoded_glimpse_prime = apply_object_wise(
+            self.glimpse_prime_encoder, glimpse_prime,
+            n_trailing_dims=3, output_size=self.A, is_training=self.is_training)
+
+        if not is_posterior:
+            encoded_glimpse_prime = tf.zeros((batch_size, n_objects, self.A), dtype=tf.float32)
+
+        # --- predict distribution for d_box ---
+
+        # roughly:
+        # base_features == temporal_state, encoded_glimpse_prime == hidden_output
+        # hidden_output conditions on encoded_glimpse, and that's the only place encoded_glimpse is used.
+
+        # Here SQAIR conditions on the actual location values from the previous timestep, but we leave that out for now.
+        d_box_inp = tf.concat([base_features, encoded_glimpse_prime], axis=-1)
+        d_box_params = apply_object_wise(self.d_box_network, d_box_inp, output_size=8, is_training=self.is_training)
+
+        d_box_mean, d_box_log_std = tf.split(d_box_params, 2, axis=-1)
+
+        d_box_std = self.std_nonlinearity(d_box_log_std)
+
+        d_box_mean = self.training_wheels * tf.stop_gradient(d_box_mean) + (1-self.training_wheels) * d_box_mean
+        d_box_std = self.training_wheels * tf.stop_gradient(d_box_std) + (1-self.training_wheels) * d_box_std
+
+        d_yt_mean, d_xt_mean, d_ys, d_xs = tf.split(d_box_mean, 4, axis=-1)
+        d_yt_std, d_xt_std, ys_std, xs_std = tf.split(d_box_std, 4, axis=-1)
+
+        # --- position ---
+
+        # We predict position a bit differently from scale. For scale we want to put a prior on the actual value of
+        # the scale, whereas for position we want to put a prior on the difference in position over timesteps.
+
+        d_yt_logit = Normal(loc=d_yt_mean, scale=d_yt_std).sample()
+        d_xt_logit = Normal(loc=d_xt_mean, scale=d_xt_std).sample()
+
+        new_cyt = cyt + self.where_t_scale * tf.nn.tanh(d_yt_logit)
+        new_cxt = cxt + self.where_t_scale * tf.nn.tanh(d_xt_logit)
+
+        # --- scale ---
+
+        new_ys_mean = objects.ys_logit + d_ys
+        new_xs_mean = objects.xs_logit + d_xs
+
+        new_ys_logit = Normal(loc=new_ys_mean, scale=ys_std).sample()
+        new_xs_logit = Normal(loc=new_xs_mean, scale=xs_std).sample()
+
+        new_ys = float(self.max_hw - self.min_hw) * tf.nn.sigmoid(tf.clip_by_value(new_ys_logit, -10, 10)) + self.min_hw
+        new_xs = float(self.max_hw - self.min_hw) * tf.nn.sigmoid(tf.clip_by_value(new_xs_logit, -10, 10)) + self.min_hw
+
+        # Used for conditioning...for sake of spatial invariance,
+        # we can condition on absolute scale, but not on absolute position
+        d_box = tf.concat([d_yt_logit, d_xt_logit, new_ys, new_xs], axis=-1)
+        new_box = tf.concat([new_cyt, new_cxt, new_ys, new_xs], axis=-1)
+
+        new_objects.update(
+            yt=new_cyt,
+            xt=new_cxt,
+            ys=new_ys,
+            xs=new_xs,
+            normalized_box=new_box,
+
+            d_yt_logit=d_yt_logit,
+            d_xt_logit=d_xt_logit,
+            ys_logit=new_ys_logit,
+            xs_logit=new_xs_logit,
+
+            d_yt_logit_mean=d_yt_mean,
+            d_xt_logit_mean=d_xt_mean,
+            ys_logit_mean=new_ys_mean,
+            xs_logit_mean=new_xs_mean,
+
+            d_yt_logit_std=d_yt_std,
+            d_xt_logit_std=d_xt_std,
+            ys_logit_std=ys_std,
+            xs_logit_std=xs_std,
+        )
+
+        # --- attributes ---
+
+        # --- extract a glimpse using new box ---
+
+        if is_posterior:
+            _, image_height, image_width, _ = tf_shape(inp)
+            _new_cyt, _new_cxt, _new_ys, _new_xs = coords_to_image_space(
+                new_cyt, new_cxt, new_ys, new_xs, (image_height, image_width), self.anchor_box, top_left=False)
+
+            glimpse = extract_affine_glimpse(inp, self.object_shape, _new_cyt, _new_cxt, _new_ys, _new_xs)
+
+        else:
+            glimpse = tf.zeros((batch_size, n_objects, *self.object_shape, self.image_depth))
+
+        glimpse_mask = tf.nn.sigmoid(glimpse_mask_logit)
+        leading_mask_shape = tf_shape(glimpse)[:-1]
+        glimpse_mask = tf.reshape(glimpse_mask, (*leading_mask_shape, 1))
+
+        glimpse *= glimpse_mask
+
+        encoded_glimpse = apply_object_wise(
+            self.glimpse_encoder, glimpse, n_trailing_dims=3, output_size=self.A, is_training=self.is_training)
+
+        if not is_posterior:
+            encoded_glimpse = tf.zeros((batch_size, n_objects, self.A), dtype=tf.float32)
+
+        # --- predict change in attributes ---
+
+        # so under sqair we mix between three different values for the attributes:
+        # 1. value from previous timestep
+        # 2. value predicted directly from glimpse
+        # 3. value predicted based on update of temporal cell...this update conditions on hidden_output,
+        # the prediction in #2., and the where values.
+
+        # How to do this given that we are predicting the change in attr? We could just directly predict
+        # the attr instead, but call it d_attr. After all, it is in this function that we control
+        # whether d_attr is added to attr.
+
+        # So, make a prediction based on just the input:
+
+        attr_from_inp = apply_object_wise(
+            self.predict_attr_inp, encoded_glimpse, output_size=2*self.A, is_training=self.is_training)
+        attr_from_inp_mean, attr_from_inp_log_std = tf.split(attr_from_inp, [self.A, self.A], axis=-1)
+
+        attr_from_inp_std = self.std_nonlinearity(attr_from_inp_log_std)
+
+        # And then a prediction which takes the past into account (predicting gate values at the same time):
+
+        attr_from_temp_inp = tf.concat([base_features, d_box, encoded_glimpse], axis=-1)
+        attr_from_temp = apply_object_wise(
+            self.predict_attr_temp, attr_from_temp_inp, output_size=5*self.A, is_training=self.is_training)
+
+        (attr_from_temp_mean, attr_from_temp_log_std,
+         f_gate_logit, i_gate_logit, t_gate_logit) = tf.split(attr_from_temp, 5, axis=-1)
+
+        attr_from_temp_std = self.std_nonlinearity(attr_from_temp_log_std)
+
+        # bias the gates
+        f_gate = tf.nn.sigmoid(f_gate_logit + 1) * .9999
+        i_gate = tf.nn.sigmoid(i_gate_logit + 1) * .9999
+        t_gate = tf.nn.sigmoid(t_gate_logit + 1) * .9999
+
+        attr_mean = f_gate * objects.attr + (1 - i_gate) * attr_from_inp_mean + (1 - t_gate) * attr_from_temp_mean
+        attr_std = (1 - i_gate) * attr_from_inp_std + (1 - t_gate) * attr_from_temp_std
+
+        new_attr = Normal(loc=attr_mean, scale=attr_std).sample()
+
+        # --- apply change in attributes ---
+
+        new_objects.update(
+            attr=new_attr,
+            d_attr=new_attr - objects.attr,
+            d_attr_mean=attr_mean - objects.attr,
+            d_attr_std=attr_std,
+            f_gate=f_gate,
+            i_gate=i_gate,
+            t_gate=t_gate,
+            glimpse_prime=glimpse_prime,
+            glimpse_prime_mask=glimpse_prime_mask,
+        )
+
+        # --- z ---
+
+        d_z_inp = tf.concat([base_features, d_box, new_attr, encoded_glimpse], axis=-1)
+        d_z_params = apply_object_wise(self.d_z_network, d_z_inp, output_size=2, is_training=self.is_training)
+
+        d_z_mean, d_z_log_std = tf.split(d_z_params, 2, axis=-1)
+        d_z_std = self.std_nonlinearity(d_z_log_std)
+
+        d_z_mean = self.training_wheels * tf.stop_gradient(d_z_mean) + (1-self.training_wheels) * d_z_mean
+        d_z_std = self.training_wheels * tf.stop_gradient(d_z_std) + (1-self.training_wheels) * d_z_std
+
+        d_z_logit = Normal(loc=d_z_mean, scale=d_z_std).sample()
+
+        new_z_logit = objects.z_logit + d_z_logit
+        new_z = self.z_nonlinearity(new_z_logit)
+
+        new_objects.update(
+            z=new_z,
+            z_logit=new_z_logit,
+            d_z_logit=d_z_logit,
+            d_z_logit_mean=d_z_mean,
+            d_z_logit_std=d_z_std,
+        )
+
+        # --- obj ---
+
+        d_obj_inp = tf.concat([base_features, d_box, new_attr, new_z, encoded_glimpse], axis=-1)
+        d_obj_logit = apply_object_wise(self.d_obj_network, d_obj_inp, output_size=1, is_training=self.is_training)
+
+        d_obj_logit = self.training_wheels * tf.stop_gradient(d_obj_logit) + (1-self.training_wheels) * d_obj_logit
+        d_obj_log_odds = tf.clip_by_value(d_obj_logit / self.obj_temp, -10., 10.)
+
+        if self.noisy:
+            d_obj_pre_sigmoid = concrete_binary_pre_sigmoid_sample(d_obj_log_odds, self.obj_concrete_temp)
+        else:
+            d_obj_pre_sigmoid = d_obj_log_odds
+
+        d_obj = tf.nn.sigmoid(d_obj_pre_sigmoid)
+
+        new_obj = objects.obj * d_obj
+        new_render_obj = (
+            self.float_is_training * new_obj
+            + (1 - self.float_is_training) * tf.round(new_obj)
+        )
+
+        new_objects.update(
+            d_obj_log_odds=d_obj_log_odds,
+            d_obj_prob=tf.nn.sigmoid(d_obj_log_odds),
+            d_obj_pre_sigmoid=d_obj_pre_sigmoid,
+            d_obj=d_obj,
+            obj=new_obj,
+            render_obj=new_render_obj,
+        )
+
+        # --- final ---
+
+        new_objects.all = tf.concat(
+            [new_objects.normalized_box, new_objects.attr, new_objects.z, new_objects.obj], axis=-1)
+
+        # --- update each object's hidden state --
+
+        cell_input = tf.concat([d_box, new_attr, new_z, new_obj], axis=-1)
+
+        _, new_objects.prop_state = apply_object_wise(self.cell, cell_input, objects.prop_state)
+
+        return new_objects
