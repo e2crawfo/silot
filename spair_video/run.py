@@ -502,11 +502,6 @@ alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
     d_yx_prior_std=0.3,
     where_t_scale=1.0,
     independent_prop=True,
-    gate_d_attr=True,
-)
-
-alg_configs["sqair_isspair"] = alg_configs["exp_isspair"].copy(
-    use_sqair_prop=True,
 )
 
 alg_configs["shape_isspair"] = alg_configs["exp_isspair"].copy(

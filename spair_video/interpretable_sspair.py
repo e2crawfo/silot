@@ -613,13 +613,17 @@ class ISSPAIR_RenderHook(RenderHook):
     selected_color = np.array(to_rgb("xkcd:neon green"))
     unselected_color = np.array(to_rgb("xkcd:fire engine red"))
     gt_color = "xkcd:yellow"
+    glimpse_color = "xkcd:orange"
     cutoff = 0.5
 
     def build_fetches(self, updater):
         prop_names = (
             "d_obj xs_logit d_xt_logit ys_logit d_yt_logit d_z_logit xs xt ys yt "
-            "glimpse normalized_box obj glimpse_prime z appearance"
+            "glimpse normalized_box obj glimpse_prime z appearance glimpse_prime_box"
         ).split()
+
+        if updater.network.use_sqair_prop:
+            prop_names.extend(['glimpse_prime_mask', 'glimpse_mask'])
 
         disc_names = "obj render_obj z appearance normalized_box glimpse".split()
         select_names = "obj z normalized_box final_weights yt xt ys xs".split()
@@ -689,6 +693,11 @@ class ISSPAIR_RenderHook(RenderHook):
                     yt, xt, ys, xs, (image_height, image_width), updater.network.anchor_box, top_left=True)
                 fetched[mode][kind].pixel_space_box = np.concatenate(pixel_space_box, axis=-1)
 
+            g_yt, g_xt, g_ys, g_xs = np.split(fetched[mode]["prop"].glimpse_prime_box, 4, axis=-1)
+            glimpse_prime_pixel_space_box = coords_to_pixel_space(
+                g_yt, g_xt, g_ys, g_xs, (image_height, image_width), updater.network.anchor_box, top_left=True)
+            fetched[mode]["prop"].glimpse_prime_pixel_space_box = np.concatenate(glimpse_prime_pixel_space_box, axis=-1)
+
             output = fetched[mode].render.output
             fetched[mode].render.diff = self.normalize_images(np.abs(inp - output).mean(axis=-1, keepdims=True))
             fetched[mode].render.xent = self.normalize_images(
@@ -735,7 +744,13 @@ class ISSPAIR_RenderHook(RenderHook):
 
         fig_unit_size = 3
         n_other_plots = 10
-        fig_half_width = max(3*W, n_other_plots)
+
+        # number of objects per image
+        M = 5
+        if updater.network.use_sqair_prop:
+            M += 2  # for masks
+
+        fig_half_width = max(M*W, n_other_plots)
         fig_width = 2 * fig_half_width + 1 if updater.network.learn_prior else fig_half_width
         n_prop_objects = updater.network.prop_layer.n_prop_objects
         n_prop_rows = int(np.ceil(n_prop_objects / W))
@@ -750,13 +765,13 @@ class ISSPAIR_RenderHook(RenderHook):
 
             gs = gridspec.GridSpec(fig_height, fig_width, figure=fig)
 
-            post_disc_axes = np.array([[fig.add_subplot(gs[i, j]) for j in range(3*W)] for i in range(B*H)])
+            post_disc_axes = np.array([[fig.add_subplot(gs[i, j]) for j in range(M*W)] for i in range(B*H)])
             post_prop_axes = np.array([
-                [fig.add_subplot(gs[B*H+4+i, j]) for j in range(3*W)]
+                [fig.add_subplot(gs[B*H+4+i, j]) for j in range(M*W)]
                 for i in range(n_prop_rows)])
             post_prop_axes = post_prop_axes.flatten()
             post_select_axes = np.array([
-                [fig.add_subplot(gs[B*H+4+n_prop_rows+i, j]) for j in range(3*W)]
+                [fig.add_subplot(gs[B*H+4+n_prop_rows+i, j]) for j in range(M*W)]
                 for i in range(n_prop_rows)])
             post_select_axes = post_select_axes.flatten()
 
@@ -783,14 +798,14 @@ class ISSPAIR_RenderHook(RenderHook):
 
             if updater.network.learn_prior:
                 prior_disc_axes = np.array([
-                    [fig.add_subplot(gs[i, fig_half_width + 1 + j])for j in range(3*W)]
+                    [fig.add_subplot(gs[i, fig_half_width + 1 + j])for j in range(M*W)]
                     for i in range(B*H)])
                 prior_prop_axes = np.array([
-                    [fig.add_subplot(gs[B*H+4+i, fig_half_width + 1 + j]) for j in range(3*W)]
+                    [fig.add_subplot(gs[B*H+4+i, fig_half_width + 1 + j]) for j in range(M*W)]
                     for i in range(n_prop_rows)])
                 prior_prop_axes = prior_prop_axes.flatten()
                 prior_select_axes = np.array([
-                    [fig.add_subplot(gs[B*H+4+n_prop_rows+i, fig_half_width + 1 + j]) for j in range(3*W)]
+                    [fig.add_subplot(gs[B*H+4+n_prop_rows+i, fig_half_width + 1 + j]) for j in range(M*W)]
                     for i in range(n_prop_rows)])
                 prior_select_axes = prior_select_axes.flatten()
 
@@ -878,7 +893,7 @@ class ISSPAIR_RenderHook(RenderHook):
                         render_obj = _fetched.disc.render_obj[idx, t, obj_idx, 0]
                         z = _fetched.disc.z[idx, t, obj_idx, 0]
 
-                        ax = disc_axes[h * B + b, 3 * w]
+                        ax = disc_axes[h * B + b, M * w]
 
                         color = obj * self.on_color + (1-obj) * self.off_color
 
@@ -888,7 +903,7 @@ class ISSPAIR_RenderHook(RenderHook):
                             (1., 0), 0.2, 1, clip_on=False, transform=ax.transAxes, facecolor=color)
                         ax.add_patch(obj_rect)
 
-                        ax = disc_axes[h * B + b, 3 * w + 1]
+                        ax = disc_axes[h * B + b, M * w + 1]
                         self.imshow(ax, _fetched.disc.appearance[idx, t, obj_idx, :, :, :3])
 
                         fw = final_weights[n_prop_objects + obj_idx]
@@ -903,7 +918,7 @@ class ISSPAIR_RenderHook(RenderHook):
                         nbox = "bx={:.2f},{:.2f},{:.2f},{:.2f}".format(yt, xt, ys, xs)
                         ax.set_title(flt(nbox, obj=obj, robj=render_obj, z=z, final_weight=fw))
 
-                        ax = disc_axes[h * B + b, 3 * w + 2]
+                        ax = disc_axes[h * B + b, M * w + 2]
                         self.imshow(ax, _fetched.disc.appearance[idx, t, obj_idx, :, :, 3], cmap="gray")
 
                         obj_idx += 1
@@ -923,8 +938,27 @@ class ISSPAIR_RenderHook(RenderHook):
                         xt = _fetched.prop.xt[idx, t, k, 0]
                         yt = _fetched.prop.yt[idx, t, k, 0]
 
-                        ax = prop_axes[3*k]
+                        # --- object location superimposed on reconstruction ---
 
+                        ax_idx = M*k
+                        ax = prop_axes[ax_idx]
+                        self.imshow(ax, _fetched.render.output[idx, t])
+
+                        color = obj * self.on_color + (1-obj) * self.off_color
+                        top, left, height, width = _fetched.prop.pixel_space_box[idx, t, k]
+                        rect = patches.Rectangle(
+                            (left, top), width, height, linewidth=lw, edgecolor=color, facecolor='none')
+                        ax.add_patch(rect)
+
+                        top, left, height, width = _fetched.prop.glimpse_prime_pixel_space_box[idx, t, k]
+                        rect = patches.Rectangle(
+                            (left, top), width, height, linewidth=lw, edgecolor=self.glimpse_color, facecolor='none')
+                        ax.add_patch(rect)
+
+                        # --- glimpse ---
+
+                        ax_idx += 1
+                        ax = prop_axes[ax_idx]
                         self.imshow(ax, _fetched.prop.glimpse[idx, t, k, :, :, :])
 
                         color = obj * self.on_color + (1-obj) * self.off_color
@@ -932,11 +966,18 @@ class ISSPAIR_RenderHook(RenderHook):
                             (1., 0), 0.2, 1, clip_on=False, transform=ax.transAxes, facecolor=color)
                         ax.add_patch(obj_rect)
 
-                        ax = prop_axes[3*k+1]
-                        self.imshow(ax, _fetched.prop.appearance[idx, t, k, :, :, :3])
-                        nbox = "bx={:.2f},{:.2f},{:.2f},{:.2f}".format(yt, xt, ys, xs)
-                        d_nbox = "dbxl={:.2f},{:.2f},{:.2f},{:.2f}".format(d_yt_logit, d_xt_logit, ys_logit, xs_logit)
-                        ax.set_title(flt(nbox + ", " + d_nbox, dobj=d_obj, obj=obj, z=z,))
+                        # --- glimpse mask ---
+
+                        if updater.network.use_sqair_prop:
+                            ax_idx += 1
+                            ax = prop_axes[ax_idx]
+                            self.imshow(ax, _fetched.prop.glimpse_mask[idx, t, k, :, :, 0], cmap="gray")
+
+                        # --- glimpse_prime ---
+
+                        ax_idx += 1
+                        ax = prop_axes[ax_idx]
+                        self.imshow(ax, _fetched.prop.glimpse_prime[idx, t, k, :, :, :])
 
                         fw = final_weights[k]
                         color = fw * self.selected_color + (1-fw) * self.unselected_color
@@ -944,7 +985,26 @@ class ISSPAIR_RenderHook(RenderHook):
                             (1., 0), 0.2, 1, clip_on=False, transform=ax.transAxes, facecolor=color)
                         ax.add_patch(obj_rect)
 
-                        ax = prop_axes[3*k+2]
+                        # --- glimpse_prime mask ---
+
+                        if updater.network.use_sqair_prop:
+                            ax_idx += 1
+                            ax = prop_axes[ax_idx]
+                            self.imshow(ax, _fetched.prop.glimpse_prime_mask[idx, t, k, :, :, 0], cmap="gray")
+
+                        # --- appearance ---
+
+                        ax_idx += 1
+                        ax = prop_axes[ax_idx]
+                        self.imshow(ax, _fetched.prop.appearance[idx, t, k, :, :, :3])
+                        nbox = "bx={:.2f},{:.2f},{:.2f},{:.2f}".format(yt, xt, ys, xs)
+                        d_nbox = "dbxl={:.2f},{:.2f},{:.2f},{:.2f}".format(d_yt_logit, d_xt_logit, ys_logit, xs_logit)
+                        ax.set_title(flt(nbox + ", " + d_nbox, dobj=d_obj, obj=obj, z=z,))
+
+                        # --- alpha ---
+
+                        ax_idx += 1
+                        ax = prop_axes[ax_idx]
                         self.imshow(ax, _fetched.prop.appearance[idx, t, k, :, :, 3], cmap="gray")
 
                     # --- select object ---
@@ -973,11 +1033,11 @@ class ISSPAIR_RenderHook(RenderHook):
                         xt = _fetched.select.xt[idx, t, k, 0]
                         yt = _fetched.select.yt[idx, t, k, 0]
 
-                        ax = select_axes[3*k]
+                        ax = select_axes[M*k]
 
                         self.imshow(ax, prop_weight_images[k])
 
-                        ax = select_axes[3*k+1]
+                        ax = select_axes[M*k+1]
 
                         ax.set_title(flt(obj=obj, z=z, xs=xs, ys=ys, xt=xt, yt=yt))
                         self.imshow(ax, final_weight_images[k])

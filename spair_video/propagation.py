@@ -311,10 +311,7 @@ class ObjectPropagationLayer(ObjectLayer):
             glimpse_prime = tf.zeros((batch_size, n_objects, *self.object_shape, self.image_depth))
 
         new_objects.update(
-            g_yt=g_yt,
-            g_xt=g_xt,
-            g_ys=g_ys,
-            g_xs=g_xs,
+            glimpse_prime_box=tf.concat([g_yt, g_xt, g_ys, g_xs], axis=-1),
         )
 
         # --- encode glimpse ---
@@ -594,10 +591,7 @@ class SQAIRPropagationLayer(ObjectPropagationLayer):
         glimpse_prime *= glimpse_prime_mask
 
         new_objects.update(
-            g_yt=g_yt,
-            g_xt=g_xt,
-            g_ys=g_ys,
-            g_xs=g_xs,
+            glimpse_prime_box=tf.concat([g_yt, g_xt, g_ys, g_xs], axis=-1),
             glimpse_prime=glimpse_prime,
             glimpse_prime_mask=glimpse_prime_mask,
         )
@@ -615,7 +609,7 @@ class SQAIRPropagationLayer(ObjectPropagationLayer):
 
         # roughly:
         # base_features == temporal_state, encoded_glimpse_prime == hidden_output
-        # hidden_output conditions on encoded_glimpse, and that's the only place encoded_glimpse is used.
+        # hidden_output conditions on encoded_glimpse, and that's the only place encoded_glimpse_prime is used.
 
         # Here SQAIR conditions on the actual location values from the previous timestep, but we leave that out for now.
         d_box_inp = tf.concat([base_features, encoded_glimpse_prime], axis=-1)
