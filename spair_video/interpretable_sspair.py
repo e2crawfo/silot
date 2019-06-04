@@ -155,6 +155,7 @@ class InterpretableSequentialSpair(VideoNetwork):
     disc_dropout_prob = Param()
     anchor_box = Param()
     independent_prop = Param()
+    use_sqair_prop = Param()
 
     disc_layer = None
     disc_feature_extractor = None
@@ -495,7 +496,9 @@ class InterpretableSequentialSpair(VideoNetwork):
         self.record_tensors(**{"post_prop_{}".format(k): post_prop[k] for k in prop_to_record})
         self.record_tensors(
             **{"post_prop_{}".format(k): v for k, v in post_prop.items() if k.endswith('_std')})
-        self.record_tensors(post_prop_d_attr_gate=post_prop["d_attr_gate"])
+
+        if "d_attr_gate" in post_prop:
+            self.record_tensors(post_prop_d_attr_gate=post_prop["d_attr_gate"])
 
         if "f_gate" in post_prop:
             self.record_tensors(post_prop_d_attr_f_gate=post_prop["f_gate"])

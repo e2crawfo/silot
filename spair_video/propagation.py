@@ -163,9 +163,7 @@ class ObjectPropagationLayer(ObjectLayer):
 
         return kl
 
-    def _call(self, inp, features, objects, is_training, is_posterior):
-        print("\n" + "-" * 10 + " PropagationLayer(is_posterior={}) ".format(is_posterior) + "-" * 10)
-
+    def _build_networks(self):
         self.maybe_build_subnet("d_box_network", key="d_box", builder=cfg.build_lateral)
         self.maybe_build_subnet("d_attr_network", key="d_attr", builder=cfg.build_lateral)
         self.maybe_build_subnet("d_z_network", key="d_z", builder=cfg.build_lateral)
@@ -184,6 +182,11 @@ class ObjectPropagationLayer(ObjectLayer):
                 self.maybe_build_subnet("glimpse_prime_network", key="glimpse_prime", builder=cfg.build_lateral)
             self.maybe_build_subnet("glimpse_prime_encoder", builder=cfg.build_object_encoder)
             self.maybe_build_subnet("glimpse_encoder", builder=cfg.build_object_encoder)
+
+    def _call(self, inp, features, objects, is_training, is_posterior):
+        print("\n" + "-" * 10 + " PropagationLayer(is_posterior={}) ".format(is_posterior) + "-" * 10)
+
+        self._build_networks()
 
         if not self.initialized:
             # Note this limits the re-usability of this module to images
@@ -515,8 +518,27 @@ class ObjectPropagationLayer(ObjectLayer):
         return new_objects
 
 
-class SQAIRPropagationLayer(ObjectLayer):
-    """ Reimplementation of SQAIR's propagation system, made to be compatible """
+class SQAIRPropagationLayer(ObjectPropagationLayer):
+    """ Reimplementation of SQAIR's propagation system, made to be compatible with SILOT """
+
+    def _build_networks(self):
+        self.maybe_build_subnet("d_box_network", key="d_box", builder=cfg.build_lateral)
+        self.maybe_build_subnet("predict_attr_inp", builder=cfg.build_lateral)
+        self.maybe_build_subnet("predict_attr_temp", builder=cfg.build_lateral)
+        self.maybe_build_subnet("d_z_network", key="d_z", builder=cfg.build_lateral)
+        self.maybe_build_subnet("d_obj_network", key="d_obj", builder=cfg.build_lateral)
+
+        if self.do_lateral and self.lateral_network is None:
+            self.lateral_network = SpatialAttentionLayerV2(
+                n_hidden=self.n_hidden,
+                build_mlp=lambda scope: MLP(n_units=[self.n_hidden, self.n_hidden], scope=scope),
+                do_object_wise=True,
+                scope="lateral_network",
+            )
+
+        self.maybe_build_subnet("glimpse_prime_network", key="glimpse_prime", builder=cfg.build_lateral)
+        self.maybe_build_subnet("glimpse_prime_encoder", builder=cfg.build_object_encoder)
+        self.maybe_build_subnet("glimpse_encoder", builder=cfg.build_object_encoder)
 
     def _body(self, inp, features, objects, is_posterior):
         batch_size, n_objects, _ = tf_shape(features)
@@ -565,7 +587,7 @@ class SQAIRPropagationLayer(ObjectLayer):
             g_xs = tf.zeros_like(xs)
             glimpse_prime = tf.zeros((batch_size, n_objects, *self.object_shape, self.image_depth))
 
-        glimpse_prime_mask = tf.nn.sigmoid(glimpse_prime_mask_logit)
+        glimpse_prime_mask = tf.nn.sigmoid(glimpse_prime_mask_logit + 1.)
         leading_mask_shape = tf_shape(glimpse_prime)[:-1]
         glimpse_prime_mask = tf.reshape(glimpse_prime_mask, (*leading_mask_shape, 1))
 
@@ -673,7 +695,7 @@ class SQAIRPropagationLayer(ObjectLayer):
         else:
             glimpse = tf.zeros((batch_size, n_objects, *self.object_shape, self.image_depth))
 
-        glimpse_mask = tf.nn.sigmoid(glimpse_mask_logit)
+        glimpse_mask = tf.nn.sigmoid(glimpse_mask_logit + 1.)
         leading_mask_shape = tf_shape(glimpse)[:-1]
         glimpse_mask = tf.reshape(glimpse_mask, (*leading_mask_shape, 1))
 
@@ -736,8 +758,8 @@ class SQAIRPropagationLayer(ObjectLayer):
             f_gate=f_gate,
             i_gate=i_gate,
             t_gate=t_gate,
-            glimpse_prime=glimpse_prime,
-            glimpse_prime_mask=glimpse_prime_mask,
+            glimpse=glimpse,
+            glimpse_mask=glimpse_mask,
         )
 
         # --- z ---
