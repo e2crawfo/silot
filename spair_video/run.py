@@ -81,9 +81,10 @@ basic_config = DEFAULT_CONFIG.copy(
     lr_schedule=1e-4,
     optimizer_spec="adam",
     max_grad_norm=10.0,
+    grad_n_record_groups=0,
     eval_step=5000,
-    display_step=None,
-    render_step=None,
+    display_step=0,
+    render_step=0,
     max_steps=np.inf,
 
     stage_steps=50000,
@@ -493,6 +494,7 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     do_lateral=False,
 
     independent_prop=False,
+    conv_discovery=False,
     gate_d_attr=False,
     use_sqair_prop=False,
 )
@@ -502,6 +504,29 @@ alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
     d_yx_prior_std=0.3,
     where_t_scale=1.0,
     independent_prop=True,
+    use_sqair_prop=True,
+    # image_shape=(36, 36),
+    # tile_shape=(36, 36),
+)
+
+alg_configs["conv_isspair"] = alg_configs["exp_isspair"].copy(
+    conv_discovery=True,
+    build_conv_lateral=lambda scope: ConvNet(
+        scope=scope, layers=[
+            dict(filters=None, kernel_size=1, strides=1, padding="SAME"),
+            dict(filters=None, kernel_size=1, strides=1, padding="SAME"),
+        ],
+    ),
+)
+
+alg_configs["restart_conv_isspair"] = alg_configs["conv_isspair"].copy(
+    initial_n_frames=8,
+    initial_count_prior_log_odds=0.0125,
+    end_training_wheels=1,
+    noise_schedule=0.0,
+    lr_schedule=1e-6,
+    # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-exp/exp_alg=conv-isspair_2019_06_05_20_24_30_seed=977185253/weights/best_of_stage_0"
+    load_path="/media/data/dps_data/local_experiments/env=moving-mnist-exp/exp_alg=restart-conv-isspair_2019_06_06_09_26_48_seed=1909126348/weights/best_of_stage_0"
 )
 
 alg_configs["shape_isspair"] = alg_configs["exp_isspair"].copy(

@@ -19,7 +19,7 @@ from dps.utils import Param, map_structure, Config
 from dps.utils.tf import RenderHook, tf_mean_sum, tf_shape, MLP
 
 from auto_yolo.models.core import AP, xent_loss, coords_to_pixel_space
-from auto_yolo.models.object_layer import GridObjectLayer, ObjectRenderer
+from auto_yolo.models.object_layer import GridObjectLayer, ConvGridObjectLayer, ObjectRenderer
 from auto_yolo.models.networks import SpatialAttentionLayerV2, DummySpatialAttentionLayer
 
 from spair_video.core import VideoNetwork, MOTMetrics
@@ -156,6 +156,7 @@ class InterpretableSequentialSpair(VideoNetwork):
     anchor_box = Param()
     independent_prop = Param()
     use_sqair_prop = Param()
+    conv_discovery = Param()
 
     disc_layer = None
     disc_feature_extractor = None
@@ -239,7 +240,7 @@ class InterpretableSequentialSpair(VideoNetwork):
         #     lambda: prior_prop_objects,
         #     lambda: post_prop_objects)
 
-        # --- disc, selection and rendering ---
+        # --- get features of the propagated objects for the purposes of discovery ---
 
         object_locs = prop_objects.all[..., :2]
         object_features = tf.concat([prop_objects.all[..., 2:], prop_objects.prop_state], axis=2)
@@ -274,23 +275,25 @@ class InterpretableSequentialSpair(VideoNetwork):
         # else:
         #     prior_disc_objects = None
 
-        # --- disc ---
+        # --- fuse features of the propagated objects with bottom-up features from the current frame ---
 
         is_posterior_tf = tf.ones_like(object_features_for_disc[..., 0:2]) * [1, 0]
-        post_features_inp = tf.concat(
+        post_disc_features_inp = tf.concat(
             [object_features_for_disc, self.backbone_output[:, f], is_posterior_tf], axis=-1)
 
         post_disc_features = self.discovery_feature_fuser(
-            post_features_inp, self.B*self.n_backbone_features, self.is_training)
+            post_disc_features_inp, self.B*self.n_backbone_features, self.is_training)
 
         post_disc_features = tf.reshape(
             post_disc_features, (self.batch_size, self.H, self.W, self.B, self.n_backbone_features))
+
+        # --- discovery ---
 
         post_disc_objects = self.disc_layer(
             self.inp[:, f], post_disc_features, self.is_training,
             is_posterior=True, prop_state=self.initial_prop_state)
 
-        # --- disc mask ---
+        # --- discovery dropout ---
 
         disc_mask_dist = tfp.distributions.Bernoulli(
             (1.-self.disc_dropout_prob) * tf.ones(self.batch_size))
@@ -304,8 +307,7 @@ class InterpretableSequentialSpair(VideoNetwork):
 
         # --- object selection ---
 
-        post_selected_objects = select_top_k_objects(
-            post_prop_objects, post_disc_objects)
+        post_selected_objects = select_top_k_objects(post_prop_objects, post_disc_objects)
 
         # --- rendering ---
 
@@ -408,7 +410,10 @@ class InterpretableSequentialSpair(VideoNetwork):
         H, W = self.H, self.W
 
         if self.disc_layer is None:
-            self.disc_layer = GridObjectLayer(self.pixels_per_cell, scope="discovery")
+            if self.conv_discovery:
+                self.disc_layer = ConvGridObjectLayer(self.pixels_per_cell, scope="discovery")
+            else:
+                self.disc_layer = GridObjectLayer(self.pixels_per_cell, scope="discovery")
 
         if self.prop_cell is None:
             self.prop_cell = self.build_prop_cell(2*self.n_hidden, name="prop_cell")
