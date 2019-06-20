@@ -26,6 +26,25 @@ from spair_video.core import VideoNetwork, MOTMetrics
 from spair_video.propagation import ObjectPropagationLayer, SQAIRPropagationLayer
 
 
+def get_object_features(objects, use_abs_posn, is_posterior):
+    prop_state = objects.prop_state if is_posterior else objects.prior_prop_state
+    if use_abs_posn:
+        return tf.concat(
+            [objects.abs_posn,
+             objects.normalized_box[..., 2:],
+             objects.attr,
+             objects.z,
+             objects.obj,
+             prop_state], axis=-1)
+    else:
+        return tf.concat(
+            [objects.normalized_box[..., 2:],
+             objects.attr,
+             objects.z,
+             objects.obj,
+             prop_state], axis=-1)
+
+
 def select_top_k_objects(prop, disc):
     batch_size, *prop_other, final = tf_shape(prop.obj)
     assert final == 1
@@ -135,11 +154,20 @@ def make_tensor_arrays(structure, n_frames):
     return tas
 
 
+class Prior_AP(AP):
+    def get_feed_dict(self, updater):
+        return {updater.network._prior_start_step: self.start_frame}
+
+
+class Prior_MOTMetrics(MOTMetrics):
+    def get_feed_dict(self, updater):
+        return {updater.network._prior_start_step: self.start_frame}
+
+
 class InterpretableSequentialSpair(VideoNetwork):
     build_backbone = Param()
     build_discovery_feature_fuser = Param()
     build_mlp = Param()
-    build_prop_cell = Param()
 
     n_backbone_features = Param()
     n_objects_per_cell = Param()
@@ -150,21 +178,30 @@ class InterpretableSequentialSpair(VideoNetwork):
     kl_weight = Param()
 
     prior_start_step = Param()
-    n_hidden = Param()
+    eval_prior_start_step = Param()
     learn_prior = Param()
+    n_hidden = Param()
     disc_dropout_prob = Param()
     anchor_box = Param()
     independent_prop = Param()
     use_sqair_prop = Param()
     conv_discovery = Param()
+    use_abs_posn = Param()
 
     disc_layer = None
     disc_feature_extractor = None
+
     prop_layer = None
-    prop_feature_extractor = None
+    prior_prop_layer = None
     prop_cell = None
+    prior_prop_cell = None
+    prop_feature_extractor = None
 
     object_renderer = None
+
+    def __init__(self, *args, **kwargs):
+        self._prior_start_step = tf.constant(self.prior_start_step, tf.int32)
+        super().__init__(*args, **kwargs)
 
     @property
     def eval_funcs(self):
@@ -174,6 +211,11 @@ class InterpretableSequentialSpair(VideoNetwork):
                 eval_funcs = {"AP_at_point_{}".format(int(10 * v)): AP(v) for v in ap_iou_values}
                 eval_funcs["AP"] = AP(ap_iou_values)
                 eval_funcs["MOT"] = MOTMetrics()
+
+                if self.learn_prior:
+                    eval_funcs["prior_AP"] = Prior_AP(ap_iou_values, start_frame=self.eval_prior_start_step)
+                    eval_funcs["prior_MOT"] = Prior_MOTMetrics(start_frame=self.eval_prior_start_step)
+
                 self._eval_funcs = eval_funcs
             else:
                 self._eval_funcs = {}
@@ -183,8 +225,12 @@ class InterpretableSequentialSpair(VideoNetwork):
     def _loop_cond(self, f, *_):
         return f < self.dynamic_n_frames
 
-    def _loop_body(self, f, normalized_box, attr, z, obj, _all, prop_state, ys_logit, xs_logit, z_logit, *tensor_arrays):
+    def _loop_body(
+            self, f, abs_posn, normalized_box, attr, z, obj, prop_state, prior_prop_state,
+            ys_logit, xs_logit, z_logit, *tensor_arrays):
+
         objects = AttrDict(
+            abs_posn=abs_posn,
             normalized_box=normalized_box,
             ys_logit=ys_logit,
             xs_logit=xs_logit,
@@ -192,8 +238,8 @@ class InterpretableSequentialSpair(VideoNetwork):
             z=z,
             z_logit=z_logit,
             obj=obj,
-            all=_all,
             prop_state=prop_state,
+            prior_prop_state=prior_prop_state,
         )
 
         structured_result = self._inner_loop_body(f, objects)
@@ -204,46 +250,59 @@ class InterpretableSequentialSpair(VideoNetwork):
 
         return [
             f,
+            selected_objects.abs_posn,
             selected_objects.normalized_box,
             selected_objects.attr,
             selected_objects.z,
             selected_objects.obj,
-            selected_objects.all,
             selected_objects.prop_state,
+            selected_objects.prior_prop_state,
             selected_objects.ys_logit,
             selected_objects.xs_logit,
             selected_objects.z_logit,
             *tensor_arrays]
 
     def _inner_loop_body(self, f, objects):
+        use_prior_objects = tf.logical_and(
+            tf.logical_and(0 <= self._prior_start_step, self._prior_start_step <= f),
+            tf.constant(self.learn_prior, tf.bool))
+
+        float_use_prior_objects = tf.cast(use_prior_objects, tf.float32)
 
         # --- prop ---
 
-        object_features = tf.concat([objects.all[..., 2:], objects.prop_state], axis=2)
-        object_locs = objects.all[..., :2]
+        object_locs = objects.normalized_box[..., :2]
+        object_features = get_object_features(objects, self.use_abs_posn, is_posterior=True)
 
         object_features_for_prop = self.prop_feature_extractor(
             object_locs, object_features, object_locs, object_features, self.is_training)
 
-        prop_args = (self.inp[:, f], object_features_for_prop, objects, self.is_training,)
+        post_prop_objects = self.prop_layer(
+            self.inp[:, f], object_features_for_prop, objects, self.is_training, is_posterior=True)
 
-        post_prop_objects = self.prop_layer(*prop_args, is_posterior=True)
-        prop_objects = post_prop_objects
+        if self.learn_prior:
+            object_features = get_object_features(objects, self.use_abs_posn, is_posterior=False)
+            object_features_for_prop = self.prop_feature_extractor(
+                object_locs, object_features, object_locs, object_features, self.is_training)
+            prior_prop_objects = self.prior_prop_layer(
+                self.inp[:, f], object_features_for_prop, objects, self.is_training, is_posterior=False)
 
-        # if self.learn_prior:
-        #     prior_prop_objects = self.prop_layer(*prop_args, is_posterior=False)
-        # else:
-        #     prior_prop_objects = None
+            prop_objects = tf.cond(
+                use_prior_objects,
+                lambda: prior_prop_objects,
+                lambda: post_prop_objects)
 
-        # prop_objects = tf.cond(
-        #     use_prior_objects,
-        #     lambda: prior_prop_objects,
-        #     lambda: post_prop_objects)
+            prop_objects.prop_state = post_prop_objects.prop_state
+            prop_objects.prior_prop_state = prior_prop_objects.prior_prop_state
 
-        # --- get features of the propagated objects for the purposes of discovery ---
+        else:
+            prior_prop_objects = None
+            prop_objects = post_prop_objects
 
-        object_locs = prop_objects.all[..., :2]
-        object_features = tf.concat([prop_objects.all[..., 2:], prop_objects.prop_state], axis=2)
+        # --- get features of the propagated objects for discovery ---
+
+        object_locs = prop_objects.normalized_box[..., :2]
+        object_features = get_object_features(prop_objects, self.use_abs_posn, is_posterior=True)
 
         object_features_for_disc = self.disc_feature_extractor(
             object_locs, object_features, self.grid_cell_centers, None, self.is_training)
@@ -251,35 +310,10 @@ class InterpretableSequentialSpair(VideoNetwork):
         object_features_for_disc = tf.reshape(
             object_features_for_disc, (self.batch_size, self.H, self.W, self.n_hidden))
 
-        # if self.learn_prior:
-        #     dummy_backbone_output = tf.zeros_like(self.backbone_output[:, f])
-
-        #     is_prior_tf = tf.ones_like(prop_object_features[..., 0:2]) * [0, 1]
-        #     prior_features_inp = tf.concat(
-        #         [prop_object_features, dummy_backbone_output, is_prior_tf], axis=-1)
-
-        #     prior_disc_features = self.disc_feature_fuser(
-        #         prior_features_inp, self.B*self.n_backbone_features, self.is_training)
-
-        #     prior_disc_features = tf.reshape(
-        #         prior_disc_features, (self.batch_size, self.H, self.W, self.B, self.n_backbone_features))
-
-        #     prior_disc_objects = self.disc_layer(
-        #         self.inp[:, f], prior_disc_features, self.is_training, is_posterior=False)
-
-        #     prior_selected_objects = select_top_k_objects(prior_prop_objects, prior_disc_objects)
-
-        #     prior_render_tensors = self.object_renderer(
-        #         prior_selected_objects, self._tensors["background"][:, f], self.is_training)
-
-        # else:
-        #     prior_disc_objects = None
-
         # --- fuse features of the propagated objects with bottom-up features from the current frame ---
 
-        is_posterior_tf = tf.ones_like(object_features_for_disc[..., 0:2]) * [1, 0]
         post_disc_features_inp = tf.concat(
-            [object_features_for_disc, self.backbone_output[:, f], is_posterior_tf], axis=-1)
+            [object_features_for_disc, self.backbone_output[:, f]], axis=-1)
 
         post_disc_features = self.discovery_feature_fuser(
             post_disc_features_inp, self.B*self.n_backbone_features, self.is_training)
@@ -293,6 +327,11 @@ class InterpretableSequentialSpair(VideoNetwork):
             self.inp[:, f], post_disc_features, self.is_training,
             is_posterior=True, prop_state=self.initial_prop_state)
 
+        post_disc_objects.abs_posn = (
+            post_disc_objects.normalized_box[..., :2]
+            + tf.cast(self._tensors['offset'][:, None], tf.float32) / self.anchor_box
+        )
+
         # --- discovery dropout ---
 
         disc_mask_dist = tfp.distributions.Bernoulli(
@@ -300,41 +339,32 @@ class InterpretableSequentialSpair(VideoNetwork):
         disc_mask = tf.cast(disc_mask_dist.sample(), tf.float32)
         do_mask = self.float_is_training * tf.cast(f > 0, tf.float32)
         disc_mask = do_mask * disc_mask + (1 - do_mask) * tf.ones(self.batch_size)
+
+        # Don't discover objects if using prior
+        disc_mask = float_use_prior_objects * tf.zeros(self.batch_size) + (1 - float_use_prior_objects) * disc_mask
+
         disc_mask = disc_mask[:, None, None]
 
         post_disc_objects.obj = disc_mask * post_disc_objects.obj
         post_disc_objects.render_obj = disc_mask * post_disc_objects.render_obj
 
+        disc_objects = post_disc_objects
+
         # --- object selection ---
 
-        post_selected_objects = select_top_k_objects(post_prop_objects, post_disc_objects)
+        selected_objects = select_top_k_objects(prop_objects, disc_objects)
 
         # --- rendering ---
 
-        post_render_tensors = self.object_renderer(
-            post_selected_objects, self._tensors["background"][:, f], self.is_training)
-
-        # ---
-
-        render_tensors = post_render_tensors
-        selected_objects = post_selected_objects
-
-        # render_tensors = tf.cond(
-        #     use_prior_objects,
-        #     lambda: prior_render_tensors,
-        #     lambda: post_render_tensors)
-
-        # selected_objects = tf.cond(
-        #     use_prior_objects,
-        #     lambda: prior_selected_objects,
-        #     lambda: post_selected_objects)
+        render_tensors = self.object_renderer(
+            selected_objects, self._tensors["background"][:, f], self.is_training)
 
         # --- appearance of object sets for plotting ---
 
-        post_prop_objects.update(
-            self.object_renderer(post_prop_objects, None, self.is_training, appearance_only=True))
-        post_disc_objects.update(
-            self.object_renderer(post_disc_objects, None, self.is_training, appearance_only=True))
+        prop_objects.update(
+            self.object_renderer(prop_objects, None, self.is_training, appearance_only=True))
+        disc_objects.update(
+            self.object_renderer(disc_objects, None, self.is_training, appearance_only=True))
 
         # --- kl ---
 
@@ -351,10 +381,10 @@ class InterpretableSequentialSpair(VideoNetwork):
 
         _tensors = AttrDict(
             post=AttrDict(
-                prop=post_prop_objects,
-                disc=post_disc_objects,
-                select=post_selected_objects,
-                render=post_render_tensors,
+                prop=prop_objects,
+                disc=disc_objects,
+                select=selected_objects,
+                render=render_tensors,
             ),
 
             selected_objects=selected_objects,
@@ -367,29 +397,14 @@ class InterpretableSequentialSpair(VideoNetwork):
             **render_tensors,
         )
 
-        # --- prior ---
+        if self.learn_prior:
+            _tensors.prior = AttrDict(
+                prop=prior_prop_objects
+            )
 
-        # if self.learn_prior:
-        #     prior_prop_objects.update(
-        #         self.object_renderer(prior_prop_objects, None, self.is_training, appearance_only=True))
-        #     prior_disc_objects.update(
-        #         self.object_renderer(prior_disc_objects, None, self.is_training, appearance_only=True))
-
-        #     prop_learned_prior_kl = self.prop_layer.compute_kl(
-        #         post_prop_objects, prior=prior_prop_objects)
-        #     disc_learned_prior_kl = self.disc_layer.compute_kl(
-        #         post_disc_objects, prior=prior_disc_objects)
-
-        #     _tensors.update(
-        #         prior=AttrDict(
-        #             prop=prior_prop_objects,
-        #             disc=prior_disc_objects,
-        #             select=prior_selected_objects,
-        #             render=prior_render_tensors,
-        #         ),
-        #         disc_learned_prior_kl=disc_learned_prior_kl,
-        #         prop_learned_prior_kl=prop_learned_prior_kl,
-        #     )
+            prop_learned_prior_kl = self.prop_layer.compute_kl(
+                post_prop_objects, prior=prior_prop_objects, do_obj=True)
+            _tensors.update(prop_learned_prior_kl=prop_learned_prior_kl)
 
         return _tensors
 
@@ -415,15 +430,25 @@ class InterpretableSequentialSpair(VideoNetwork):
             else:
                 self.disc_layer = GridObjectLayer(self.pixels_per_cell, scope="discovery")
 
-        if self.prop_cell is None:
-            self.prop_cell = self.build_prop_cell(2*self.n_hidden, name="prop_cell")
-            # self.prop_cell must be a Sonnet RNNCore
-            self.initial_prop_state = snt.trainable_initial_state(
-                1, self.prop_cell.state_size, tf.float32, name="prop_cell_initial_state")
-
         if self.prop_layer is None:
+
+            if self.prop_cell is None:
+                self.prop_cell = cfg.build_prop_cell(2*self.n_hidden, name="prop_cell")
+
+                # self.prop_cell must be a Sonnet RNNCore
+                self.initial_prop_state = snt.trainable_initial_state(
+                    1, self.prop_cell.state_size, tf.float32, name="prop_cell_initial_state")
+
             prop_class = SQAIRPropagationLayer if self.use_sqair_prop else ObjectPropagationLayer
-            self.prop_layer = prop_class(cell=self.prop_cell, scope="propagation")
+            self.prop_layer = prop_class(self.prop_cell, scope="propagation")
+
+        if self.prior_prop_layer is None and self.learn_prior:
+
+            if self.prior_prop_cell is None:
+                self.prior_prop_cell = cfg.build_prop_cell(2*self.n_hidden, name="prior_prop_cell")
+
+            prop_class = SQAIRPropagationLayer if self.use_sqair_prop else ObjectPropagationLayer
+            self.prior_prop_layer = prop_class(self.prior_prop_cell, scope="prior_propagation")
 
         if self.object_renderer is None:
             self.object_renderer = ObjectRenderer(scope="renderer")
@@ -468,8 +493,9 @@ class InterpretableSequentialSpair(VideoNetwork):
         tensor_arrays = make_tensor_arrays(structure, self.dynamic_n_frames)
 
         loop_vars = [
-            f, objects.normalized_box, objects.attr, objects.z, objects.obj, objects.all,
-            objects.prop_state, objects.ys_logit, objects.xs_logit, objects.z_logit, *tensor_arrays]
+            f, objects.abs_posn, objects.normalized_box, objects.attr, objects.z, objects.obj,
+            objects.prop_state, objects.prior_prop_state, objects.ys_logit, objects.xs_logit, objects.z_logit,
+            *tensor_arrays]
 
         result = tf.while_loop(self._loop_cond, self._loop_body, loop_vars)
 
@@ -523,11 +549,6 @@ class InterpretableSequentialSpair(VideoNetwork):
             self.record_tensors(
                 **{"prior_prop_{}".format(k): v for k, v in prior_prop.items() if k.endswith('_std')})
 
-            prior_disc = self._tensors.prior.disc
-            self.record_tensors(**{"prior_disc_{}".format(k): prior_disc[k] for k in disc_to_record})
-            self.record_tensors(
-                **{"prior_disc_{}".format(k): v for k, v in prior_disc.items() if k.endswith('_std')})
-
         # --- losses ---
 
         if self.train_reconstruction:
@@ -539,13 +560,11 @@ class InterpretableSequentialSpair(VideoNetwork):
             )
 
         if self.train_kl:
-            kl_weight = 0.5 * self.kl_weight if self.learn_prior else self.kl_weight
-
             prop_obj = self._tensors.post.prop.obj
             prop_indep_prior_kl = self._tensors["prop_indep_prior_kl"]
 
             self.losses.update(
-                **{"prop_indep_prior_{}".format(k): kl_weight * tf_mean_sum(prop_obj * kl)
+                **{"prop_indep_prior_{}".format(k): self.kl_weight * tf_mean_sum(prop_obj * kl)
                    for k, kl in prop_indep_prior_kl.items()
                    if "obj" not in k}
             )
@@ -554,39 +573,32 @@ class InterpretableSequentialSpair(VideoNetwork):
             disc_indep_prior_kl = self._tensors["disc_indep_prior_kl"]
 
             self.losses.update(
-                **{"disc_indep_prior_{}".format(k): kl_weight * tf_mean_sum(disc_obj * kl)
+                **{"disc_indep_prior_{}".format(k): self.kl_weight * tf_mean_sum(disc_obj * kl)
                    for k, kl in disc_indep_prior_kl.items()
                    if "obj" not in k}
             )
 
             self.losses.update(
-                indep_prior_obj_kl=kl_weight * tf_mean_sum(self._tensors["indep_prior_obj_kl"]),
+                indep_prior_obj_kl=self.kl_weight * tf_mean_sum(self._tensors["indep_prior_obj_kl"]),
             )
 
             if self.learn_prior:
                 prop_learned_prior_kl = self._tensors["prop_learned_prior_kl"]
                 self.losses.update(
-                    **{"prop_learned_prior_{}".format(k): kl_weight * tf_mean_sum(prop_obj * kl)
+                    **{"prop_learned_prior_{}".format(k): self.kl_weight * tf_mean_sum(prop_obj * kl)
                        for k, kl in prop_learned_prior_kl.items()
                        if "obj" not in k}
                 )
 
-                disc_learned_prior_kl = self._tensors["disc_learned_prior_kl"]
                 self.losses.update(
-                    **{"disc_learned_prior_{}".format(k): kl_weight * tf_mean_sum(disc_obj * kl)
-                       for k, kl in disc_learned_prior_kl.items()
-                       if "obj" not in k}
+                    learned_prior_obj_kl=self.kl_weight * tf_mean_sum(prop_learned_prior_kl["d_obj_kl"]),
                 )
 
-                self.losses.update(
-                    learned_prior_obj_kl=kl_weight * tf_mean_sum(self._tensors["learned_prior_obj_kl"]),
-                )
-
-            # Don't multiply by 0.5 here, because there is no learned prior
             if cfg.background_cfg.mode in ("learn_and_transform", "learn"):
                 self.losses.update(
                     bg_attr_kl=self.kl_weight * tf_mean_sum(self._tensors["bg_attr_kl"]),
                 )
+
             if cfg.background_cfg.mode == "learn_and_transform":
                 self.losses.update(
                     bg_transform_kl=self.kl_weight * tf_mean_sum(self._tensors["bg_transform_kl"]),
@@ -618,8 +630,9 @@ class ISSPAIR_RenderHook(RenderHook):
     selected_color = np.array(to_rgb("xkcd:neon green"))
     unselected_color = np.array(to_rgb("xkcd:fire engine red"))
     gt_color = "xkcd:yellow"
-    glimpse_color = "xkcd:orange"
+    glimpse_color = "xkcd:green"
     cutoff = 0.5
+    dpi = 50
 
     def build_fetches(self, updater):
         prop_names = (
@@ -643,16 +656,8 @@ class ISSPAIR_RenderHook(RenderHook):
             ),
         )
 
-        if updater.network.learn_prior:
-            _fetches["prior"] = Config(
-                disc=Config(**{n: 0 for n in disc_names}),
-                prop=Config(**{n: 0 for n in prop_names}),
-                select=Config(**{n: 0 for n in select_names}),
-                render=Config(**{n: 0 for n in render_names}),
-            )
-
         fetches = ' '.join(list(_fetches.keys()))
-        fetches += " inp background"
+        fetches += " inp background offset"
 
         network = updater.network
         if "n_annotations" in network._tensors:
@@ -673,7 +678,19 @@ class ISSPAIR_RenderHook(RenderHook):
         fetched = self._fetch(updater)
         fetched = Config(fetched)
         self._prepare_fetched(updater, fetched)
-        self._plot_patches(updater, fetched)
+        self._plot(updater, fetched, post=True)
+
+        if updater.network.learn_prior:
+            feed_dict = self.get_feed_dict(updater)
+
+            feed_dict[updater.network._prior_start_step] = updater.network.eval_prior_start_step
+
+            sess = tf.get_default_session()
+            fetched = sess.run(self.to_fetch, feed_dict=feed_dict)
+            fetched = Config(fetched)
+
+            self._prepare_fetched(updater, fetched)
+            self._plot(updater, fetched, post=False)
 
     @staticmethod
     def normalize_images(images):
@@ -689,7 +706,7 @@ class ISSPAIR_RenderHook(RenderHook):
 
         background = fetched['background']
 
-        modes = "prior post" if updater.network.learn_prior else "post"
+        modes = "post"
 
         for mode in modes.split():
             for kind in "disc prop select".split():
@@ -733,7 +750,7 @@ class ISSPAIR_RenderHook(RenderHook):
             bg_raw=bg_raw,
         )
 
-    def _plot_patches(self, updater, fetched):
+    def _plot(self, updater, fetched, post):
         # Create a plot showing what each object is generating
 
         def flt(main=None, **floats):
@@ -755,8 +772,7 @@ class ISSPAIR_RenderHook(RenderHook):
         if updater.network.use_sqair_prop:
             M += 2  # for masks
 
-        fig_half_width = max(M*W, n_other_plots)
-        fig_width = 2 * fig_half_width + 1 if updater.network.learn_prior else fig_half_width
+        fig_width = max(M*W, n_other_plots)
         n_prop_objects = updater.network.prop_layer.n_prop_objects
         n_prop_rows = int(np.ceil(n_prop_objects / W))
         fig_height = B * H + 4 + 2*n_prop_rows + 2
@@ -782,7 +798,7 @@ class ISSPAIR_RenderHook(RenderHook):
 
             post_other_axes = []
             for i in range(2):
-                for j in range(int(fig_half_width/2)):
+                for j in range(int(fig_width/2)):
                     start_y = B*H + 2*i
                     end_y = start_y + 2
                     start_x = 2*j
@@ -801,43 +817,9 @@ class ISSPAIR_RenderHook(RenderHook):
                 ('post', post_disc_axes, post_prop_axes, post_select_axes, post_other_axes)
             ]
 
-            if updater.network.learn_prior:
-                prior_disc_axes = np.array([
-                    [fig.add_subplot(gs[i, fig_half_width + 1 + j])for j in range(M*W)]
-                    for i in range(B*H)])
-                prior_prop_axes = np.array([
-                    [fig.add_subplot(gs[B*H+4+i, fig_half_width + 1 + j]) for j in range(M*W)]
-                    for i in range(n_prop_rows)])
-                prior_prop_axes = prior_prop_axes.flatten()
-                prior_select_axes = np.array([
-                    [fig.add_subplot(gs[B*H+4+n_prop_rows+i, fig_half_width + 1 + j]) for j in range(M*W)]
-                    for i in range(n_prop_rows)])
-                prior_select_axes = prior_select_axes.flatten()
-
-                prior_other_axes = []
-                for i in range(2):
-                    for j in range(int(fig_half_width/2)):
-                        start_y = B*H + 2*i
-                        end_y = start_y + 2
-                        start_x = fig_half_width + 1 + 2*j
-                        end_x = start_x + 2
-                        ax = fig.add_subplot(gs[start_y:end_y, start_x:end_x])
-                        prior_other_axes.append(ax)
-
-                prior_other_axes = np.array(prior_other_axes)
-
-                prior_axes = np.concatenate(
-                    [prior_disc_axes.flatten(), prior_prop_axes.flatten(),
-                     prior_select_axes.flatten(), prior_other_axes.flatten()],
-                    axis=0)
-
-                axes_sets.append(('prior', prior_disc_axes, prior_prop_axes, prior_select_axes, prior_other_axes))
-            else:
-                prior_axes = np.zeros_like(post_axes[:0])
-
             bottom_axes = np.array([fig.add_subplot(gs[-2:, 2*i:2*(i+1)]) for i in range(int(fig_width/2))])
 
-            all_axes = np.concatenate([post_axes, prior_axes, bottom_axes], axis=0)
+            all_axes = np.concatenate([post_axes, bottom_axes], axis=0)
 
             for ax in all_axes.flatten():
                 ax.set_axis_off()
@@ -846,14 +828,11 @@ class ISSPAIR_RenderHook(RenderHook):
 
             lw = self.linewidth
 
-            print("Plotting patches for {}...".format(idx))
+            print("Plotting {} for {}...".format(idx, "posterior" if post else "prior"))
 
             def func(t):
                 print("timestep {}".format(t))
-                if updater.network.learn_prior:
-                    time_text.set_text('post{}t = {}{}prior'.format(' '*40, t, ' '*40))
-                else:
-                    time_text.set_text('t={}'.format(t))
+                time_text.set_text('t={},offset={}'.format(t, fetched.offset[idx]))
 
                 ax_inp = bottom_axes[0]
                 self.imshow(ax_inp, fetched.inp[idx, t])
@@ -1128,8 +1107,10 @@ class ISSPAIR_RenderHook(RenderHook):
 
             anim = animation.FuncAnimation(fig, func, frames=T, interval=500)
 
-            path = self.path_for('patches/{}'.format(idx), updater, ext="mp4")
-            anim.save(path, writer='ffmpeg', codec='hevc', extra_args=['-preset', 'ultrafast'])
+            prefix = "post" if post else "prior"
+
+            path = self.path_for('{}/{}'.format(prefix, idx), updater, ext="mp4")
+            anim.save(path, writer='ffmpeg', codec='hevc', extra_args=['-preset', 'ultrafast'], dpi=self.dpi)
 
             plt.close(fig)
 

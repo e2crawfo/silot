@@ -66,6 +66,8 @@ basic_config = DEFAULT_CONFIG.copy(
     load_path=None,
     start_tensorboard=10,
     render_final=False,
+    render_first=False,
+    overwrite_plots=False,
 
     curriculum=[dict()],
 
@@ -76,7 +78,7 @@ basic_config = DEFAULT_CONFIG.copy(
     patience=0,
 
     n_train=60000,
-    n_val=992,  # has to be a multiple of the batch size for sqair
+    n_val=104,  # has to be a multiple of the batch size for sqair
 
     lr_schedule=1e-4,
     optimizer_spec="adam",
@@ -101,8 +103,6 @@ basic_config = DEFAULT_CONFIG.copy(
     fixed_weights="",
     fixed_values={},
     no_gradient="",
-    overwrite_plots=False,
-    render_first=False,
 )
 
 
@@ -117,8 +117,9 @@ env_configs['moving_mnist'] = Config(
     tile_shape=(48, 48),
     patch_shape=(14, 14),
     object_shape=(14, 14),
-    min_digits=1,
-    max_digits=9,
+    n_objects=8,
+    min_digits=8,
+    max_digits=8,
     max_overlap=14**2/2,
     n_classes=82,
     largest_digit=81,
@@ -139,36 +140,47 @@ env_configs['moving_mnist'] = Config(
     background_colours="",
     background_cfg=dict(mode="colour", colour="black"),
     postprocessing="",
-    patch_speed=5,
+    patch_speed=2,
+    # patch_speed=5,
     bounce_patches=True,
 
     annotation_scheme='correct',
+    appearance_prob=1.0,
+    disappearance_prob=0.0,
 )
 
-env_configs['hard_moving_mnist'] = env_configs['moving_mnist'].copy(
-    n_objects=8,
-    min_digits=8,
-    max_digits=8,
+env_configs['moving_mnist_sub'] = env_configs['moving_mnist'].copy(
+    postprocessing="random",
+    tile_shape=(48, 48),
+    image_shape=(96, 96),
+    n_objects=8*4,
+    min_digits=8*4,
+    max_digits=8*4,
 )
 
-env_configs['moving_mnist_exp'] = env_configs['hard_moving_mnist'].copy(
-    patch_speed=2,
-    bounce_patches=False,
+env_configs['moving_mnist_gen'] = env_configs['moving_mnist_sub'].copy(
+    postprocessing="",
+    n_train=4,
+    n_val=100,
+    noisy=False,
+    initial_n_frames=8,
+    render_first=True,
 )
 
-env_configs["small_moving_mnist"] = env_configs["moving_mnist"].copy(
-    image_shape=(36, 36),
-    tile_shape=(36, 36),
-    n_frames=3,
-    min_digits=1,
-    max_digits=2,
-)
-
-env_configs["big_moving_mnist"] = env_configs["moving_mnist"].copy(
+env_configs['moving_mnist_big'] = env_configs['moving_mnist'].copy(
     image_shape=(96, 96),
     tile_shape=(48, 48),
-    min_digits=1,
-    max_digits=20,
+    n_objects=4*8,
+    min_digits=4*8,
+    max_digits=4*8,
+)
+
+env_configs['moving_mnist_small'] = env_configs['moving_mnist'].copy(
+    image_shape=(36, 36),
+    tile_shape=(36, 36),
+    n_objects=4,
+    min_digits=4,
+    max_digits=4,
 )
 
 env_configs["mnist_learned_background"] = env_configs["moving_mnist"].copy(
@@ -458,6 +470,11 @@ alg_configs["background_only"] = dict(
 
 alg_configs["isspair"] = alg_configs["sspair"].copy(
     render_hook=ISSPAIR_RenderHook(),
+
+    prior_start_step=-1,
+    eval_prior_start_step=3,
+    learn_prior=True,
+
     build_discovery_feature_fuser=lambda scope: ConvNet(
         scope=scope, layers=[
             dict(filters=None, kernel_size=3, strides=1, padding="SAME"),
@@ -465,10 +482,10 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
         ],
     ),
     build_prop_cell=snt.GRU,
-    prior_start_step=-1,
     build_network=InterpretableSequentialSpair,
-    n_prop_objects=16,
     build_mlp=lambda scope: MLP(n_units=[64, 64], scope=scope),
+
+    n_prop_objects=16,
     n_hidden=64,
     kernel_std=0.1,
 
@@ -483,30 +500,44 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
 
     learn_glimpse_prime=False,
     glimpse_prime_scale=2.0,
-    use_glimpse=True,
 
     initial_n_frames=2,
     n_frames_scale=2,
 
-    learn_prior=False,
-    where_t_scale=0.2,
+    where_t_scale=1.0,
 
     do_lateral=False,
 
-    independent_prop=False,
     conv_discovery=False,
     gate_d_attr=False,
-    use_sqair_prop=False,
+    independent_prop=True,
+    use_sqair_prop=True,
+    use_abs_posn=True,
+    edge_resampler=False,
+
+    patience=20000,
+    curriculum=[
+        dict(patience_start=200000),
+        dict(
+            lr_schedule=1e-5, load_path=-1,
+            initial_n_frames=8,
+            initial_count_prior_log_odds=0.0125,
+            end_training_wheels=1,
+            noise_schedule=0.0,
+        ),
+        dict(
+            lr_schedule=1e-6, load_path=-1,
+            initial_n_frames=8,
+            initial_count_prior_log_odds=0.0125,
+            end_training_wheels=1,
+            noise_schedule=0.0,
+        ),
+    ],
 )
 
 alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
     d_attr_prior_std=0.4,
     d_yx_prior_std=0.3,
-    where_t_scale=1.0,
-    independent_prop=True,
-    use_sqair_prop=True,
-    # image_shape=(36, 36),
-    # tile_shape=(36, 36),
 )
 
 alg_configs["conv_isspair"] = alg_configs["exp_isspair"].copy(
@@ -524,9 +555,32 @@ alg_configs["restart_conv_isspair"] = alg_configs["conv_isspair"].copy(
     initial_count_prior_log_odds=0.0125,
     end_training_wheels=1,
     noise_schedule=0.0,
-    lr_schedule=1e-6,
     # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-exp/exp_alg=conv-isspair_2019_06_05_20_24_30_seed=977185253/weights/best_of_stage_0"
-    load_path="/media/data/dps_data/local_experiments/env=moving-mnist-exp/exp_alg=restart-conv-isspair_2019_06_06_09_26_48_seed=1909126348/weights/best_of_stage_0"
+    # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-exp/exp_alg=restart-conv-isspair_2019_06_06_09_26_48_seed=1909126348/weights/best_of_stage_0"
+    # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-exp/exp_alg=conv-isspair_2019_06_07_17_49_46_seed=850357482/weights/best_of_stage_0",
+    # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-sub/exp_alg=conv-isspair_2019_06_10_16_18_52_seed=1143638891/weights/best_of_stage_0",
+    # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-sub/exp_alg=conv-isspair_2019_06_11_11_54_18_seed=1998402147/weights/best_of_stage_0",
+    # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-big/exp_alg=conv-isspair_2019_06_15_22_40_33_seed=437172375/weights/final_for_stage_0",
+    load_path="/media/data/dps_data/local_experiments/env=moving-mnist/exp_alg=conv-isspair_2019_06_19_12_08_45_seed=902400173/weights/best_of_stage_0",
+    patience=20000,
+    curriculum=[
+        dict(
+            lr_schedule=1e-5
+        ),
+        dict(
+            lr_schedule=1e-6, load_path=-1,
+        ),
+    ]
+)
+
+alg_configs["load_conv_isspair"] = alg_configs["conv_isspair"].copy(
+    # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-sub/exp_alg=conv-isspair_2019_06_10_16_18_52_seed=1143638891/weights/best_of_stage_0",
+    load_path="/media/data/dps_data/local_experiments/env=moving-mnist-sub/exp_alg=restart-conv-isspair_2019_06_12_12_09_40_seed=1267365617/weights/best_of_stage_0",
+    n_train=100,
+    n_val=1000,
+    noisy=False,
+    do_train=False,
+    render_hook=ISSPAIR_RenderHook(),
 )
 
 alg_configs["shape_isspair"] = alg_configs["exp_isspair"].copy(

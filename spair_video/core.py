@@ -20,6 +20,10 @@ from auto_yolo.models.core import normal_vae, TensorRecorder, xent_loss, coords_
 class MOTMetrics:
     keys_accessed = "is_new normalized_box obj annotations n_annotations"
 
+    def __init__(self, start_frame=0, end_frame=np.inf):
+        self.start_frame = start_frame
+        self.end_frame = end_frame
+
     def _process_data(self, tensors, updater):
         obj = tensors['obj']
 
@@ -64,7 +68,7 @@ class MOTMetrics:
         for b in range(batch_size):
             acc = mm.MOTAccumulator(auto_id=True)
 
-            for f in range(n_frames):
+            for f in range(self.start_frame, min(self.end_frame, n_frames)):
                 gt_ids = [int(_id) for valid, _, _id, *_ in annotations[b, f] if float(valid) > 0.5]
                 gt_boxes = [
                     (top, left, bottom-top, right-left)
@@ -170,6 +174,11 @@ class VideoNetwork(TensorRecorder):
         if "background" in data:
             self._tensors.update(
                 background=data["background"],
+            )
+
+        if "offset" in data:
+            self._tensors.update(
+                offset=data["offset"],
             )
 
         max_n_frames = tf_shape(inp)[1]
