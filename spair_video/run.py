@@ -372,6 +372,7 @@ alg_configs = dict(
         use_concrete_kl=False,
         obj_concrete_temp=1.0,
         obj_temp=1.0,
+        importance_temp=.25,
         object_shape=(14, 14),
         A=64,
 
