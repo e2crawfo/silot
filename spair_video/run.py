@@ -78,7 +78,7 @@ basic_config = DEFAULT_CONFIG.copy(
     patience=0,
 
     n_train=60000,
-    n_val=104,  # has to be a multiple of the batch size for sqair
+    n_val=128,  # has to be a multiple of the batch size for sqair
 
     lr_schedule=1e-4,
     optimizer_spec="adam",
@@ -103,6 +103,8 @@ basic_config = DEFAULT_CONFIG.copy(
     fixed_weights="",
     fixed_values={},
     no_gradient="",
+
+    annotation_scheme="correct",
 )
 
 
@@ -144,7 +146,6 @@ env_configs['moving_mnist'] = Config(
     # patch_speed=5,
     bounce_patches=True,
 
-    annotation_scheme='correct',
     appearance_prob=1.0,
     disappearance_prob=0.0,
 )
@@ -161,7 +162,6 @@ env_configs['moving_mnist_sub'] = env_configs['moving_mnist'].copy(
 env_configs['moving_mnist_gen'] = env_configs['moving_mnist_sub'].copy(
     postprocessing="",
     n_train=4,
-    n_val=100,
     noisy=False,
     initial_n_frames=8,
     render_first=True,
@@ -237,8 +237,6 @@ env_configs["easy_shapes"] = Config(
     postprocessing="",
     patch_size_std=0.1,
     patch_speed=5,
-
-    annotation_scheme='correct',
 )
 
 env_configs["hard_shapes"] = env_configs["easy_shapes"].copy(
@@ -325,9 +323,9 @@ alg_configs = dict(
         prepare_func=spair_prepare_func,
         n_objects_per_cell=1,
 
-        stopping_criteria="MOT:mota,max",
+        # stopping_criteria="MOT:mota,max",
         # stopping_criteria="AP,max",
-        threshold=np.inf,
+        # threshold=np.inf,
 
         RecurrentGridConvNet=dict(
             bidirectional=False,
@@ -520,14 +518,14 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     curriculum=[
         dict(patience_start=200000),
         dict(
-            lr_schedule=1e-5, load_path=-1,
+            lr_schedule=1. / 3 * 1e-4, load_path=-1,
             initial_n_frames=8,
             initial_count_prior_log_odds=0.0125,
             end_training_wheels=1,
             noise_schedule=0.0,
         ),
         dict(
-            lr_schedule=1e-6, load_path=-1,
+            lr_schedule=1. / 9 * 1e-4, load_path=-1,
             initial_n_frames=8,
             initial_count_prior_log_odds=0.0125,
             end_training_wheels=1,
@@ -578,7 +576,6 @@ alg_configs["load_conv_isspair"] = alg_configs["conv_isspair"].copy(
     # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-sub/exp_alg=conv-isspair_2019_06_10_16_18_52_seed=1143638891/weights/best_of_stage_0",
     load_path="/media/data/dps_data/local_experiments/env=moving-mnist-sub/exp_alg=restart-conv-isspair_2019_06_12_12_09_40_seed=1267365617/weights/best_of_stage_0",
     n_train=100,
-    n_val=1000,
     noisy=False,
     do_train=False,
     render_hook=ISSPAIR_RenderHook(),
@@ -601,7 +598,6 @@ alg_configs["load_small_isspair"] = alg_configs["exp_isspair"].copy(
     render_hook=ISSPAIR_RenderHook(N=16),
     load_path="/media/data/dps_data/local_experiments/test-spair-video_env=small-moving-mnist/exp_alg=exp-isspair_2019_05_16_00_28_54_seed=30001/weights/best_of_stage_0",
     n_train=32,
-    n_val=32,
     noisy=False,
     do_train=False,
     n_frames=3,
@@ -618,7 +614,6 @@ alg_configs["load_isspair"] = alg_configs["exp_isspair"].copy(
     load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=exp-isspair_2019_05_09_09_34_52_seed=893541943/weights/best_of_stage_0",
     # load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=isspair_seed=9239644_2019_05_07_08_49_23/weights/best_of_stage_0",
     n_train=4,
-    n_val=4,
     noisy=False,
     do_train=False,
     n_frames=4,
@@ -633,7 +628,6 @@ alg_configs["load_big_isspair"] = alg_configs["exp_isspair"].copy(
     min_digits=40,
     max_digits=40,
     n_train=16,
-    n_val=16,
     noisy=False,
     do_train=False,
     n_frames=2,
@@ -675,15 +669,15 @@ alg_configs["test_isspair"] = alg_configs["isspair"].copy(
 # --- SQAIR ---
 
 alg_configs['sqair'] = Config(
-    stopping_criteria="MOT:mota,max",
+    # stopping_criteria="MOT:mota,max",
     # stopping_criteria="AP,max",
-    threshold=np.inf,
+    # threshold=np.inf,
+
     get_updater=SQAIRUpdater,
     build_network=SQAIR,
     render_hook=SQAIR_RenderHook(),
     debug=False,
     batch_size=32,
-    constant_prop_prior=0.0,
     disc_prior_type='cat',
     step_success_prob=0.75,
     prop_step_bias=5.,
@@ -701,9 +695,7 @@ alg_configs['sqair'] = Config(
     build_input_encoder=None,
     lr_schedule=1e-5,
     max_grad_norm=None,
-    schedule="4,6,10",
     l2_schedule=0.0,
-    # TODO learning rate decay by 1./3 each segment...elements of schedule give relative lengths of each segment.
     n_layers=2,
     n_hidden=8*32,
     n_what=50,
@@ -716,6 +708,22 @@ alg_configs['sqair'] = Config(
     training_wheels=0.0,
     fixed_presence=False,
     disc_step_bias=5.,
+
+    patience=20000,
+    curriculum=[
+        dict(patience_start=200000),
+        dict(
+            lr_schedule=1. / 3 * 1e-5, load_path=-1,
+            initial_n_frames=8,
+        ),
+        dict(
+            lr_schedule=1. / 9 * 1e-5, load_path=-1,
+            initial_n_frames=8,
+        ),
+    ],
+
+    prior_start_step=-1,
+    eval_prior_start_step=3,
 )
 
 
@@ -727,6 +735,7 @@ def sqair_fixed_prepare_func():
 alg_configs['fixed_sqair'] = alg_configs['sqair'].copy(
     prepare_func=sqair_fixed_prepare_func,
     fixed_presence=True,
+    disc_prior_type='fixed',
 )
 
 
@@ -778,7 +787,6 @@ alg_configs['baseline'] = Config(
     stage_steps=None,
     initial_n_frames=8,
     n_frames_scale=1,
-    annotation_scheme='correct',
     stopping_criteria="MOT:mota,max",
     threshold=np.inf,
 

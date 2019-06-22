@@ -287,6 +287,11 @@ class SQAIR_AP(AP):
         return obj, predicted_n_digits, top, left, height, width, annotations, n_annotations
 
 
+class SQAIR_Prior_AP(SQAIR_AP):
+    def get_feed_dict(self, updater):
+        return {updater.network._prior_start_step: self.start_frame}
+
+
 class SQAIR_MOTMetrics(MOTMetrics):
     keys_accessed = (
         ["resampled_" + name for name in "obj_id where_coords num_steps_per_sample".split()]
@@ -318,6 +323,11 @@ class SQAIR_MOTMetrics(MOTMetrics):
         return obj, pred_n_objects, obj_id, top, left, height, width
 
 
+class SQAIR_Prior_MOTMetrics(SQAIR_MOTMetrics):
+    def get_feed_dict(self, updater):
+        return {updater.network._prior_start_step: self.start_frame}
+
+
 class SQAIR(VideoNetwork):
     disc_prior_type = Param()
     prop_prior_type = Param()
@@ -325,7 +335,6 @@ class SQAIR(VideoNetwork):
     prop_step_bias = Param()
     prop_prior_step_bias = Param()
     step_success_prob = Param()
-    sample_from_prior = Param()
     output_scale = Param()
     output_std = Param()
     object_shape = Param()
@@ -346,9 +355,11 @@ class SQAIR(VideoNetwork):
     scale_prior = Param()
     rec_where_prior = Param()
 
-    sample_from_prior = Param()
     training_wheels = Param()
     k_particles = Param()
+
+    prior_start_step = Param()
+    eval_prior_start_step = Param()
 
     # Don't think we need these for this network
     attr_prior_mean = None
@@ -357,16 +368,20 @@ class SQAIR(VideoNetwork):
     needs_background = False
 
     def __init__(self, env, updater, scope=None, **kwargs):
+        self._prior_start_step = tf.constant(self.prior_start_step, tf.int32)
+
         ap_iou_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
         self.eval_funcs = {"AP_at_point_{}".format(int(10 * v)): SQAIR_AP(v) for v in ap_iou_values}
         self.eval_funcs["AP"] = SQAIR_AP(ap_iou_values)
         self.eval_funcs["MOT"] = SQAIR_MOTMetrics()
 
+        self.eval_funcs["prior_AP"] = SQAIR_Prior_AP(ap_iou_values, start_frame=self.eval_prior_start_step)
+        self.eval_funcs["prior_MOT"] = SQAIR_Prior_MOTMetrics(start_frame=self.eval_prior_start_step)
+
         self.training_wheels = build_scheduled_value(self.training_wheels, "training_wheels")
         super().__init__(env, updater, scope=scope, **kwargs)
 
     def build_representation(self):
-
         processed_image = index.tile_input_for_iwae(
             tf.transpose(self.inp, (1, 0, 2, 3, 4)), self.k_particles, with_time=True)
         shape = list(tf_shape(processed_image))
@@ -435,8 +450,8 @@ class SQAIR(VideoNetwork):
             # Prop cell should have a different rnn cell but should share all other estimators
             propagate_rnn_cell = self.rnn_class(self.n_hidden)
             temporal_rnn_cell = self.time_rnn_class(self.n_hidden)
-            propagation_cell = PropagationCore(encoded_input, img_size, self.object_shape, self.n_what, propagate_rnn_cell,
-                                               glimpse_encoder, transform_estimator,
+            propagation_cell = PropagationCore(encoded_input, img_size, self.object_shape, self.n_what,
+                                               propagate_rnn_cell, glimpse_encoder, transform_estimator,
                                                prop_steps_predictor, temporal_rnn_cell,
                                                debug=self.debug, training_wheels=training_wheels)
             ssm = SequentialSSM(propagation_cell)
@@ -458,7 +473,7 @@ class SQAIR(VideoNetwork):
 
             sequence_apdr = SequentialAIR(
                 self.n_steps_per_image, self.object_shape, discover, propagate,
-                time_cell, decoder, sample_from_prior=self.sample_from_prior)
+                time_cell, decoder, prior_start_step=self._prior_start_step)
 
         outputs = sequence_apdr(processed_image)
 
