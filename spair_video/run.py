@@ -683,6 +683,9 @@ alg_configs['sqair'] = Config(
     fixed_presence=False,
     disc_step_bias=5.,
 
+    fast_discovery=False,
+    fast_propagation=False,
+
     patience=20000,
     curriculum=[
         dict(patience_start=200000),

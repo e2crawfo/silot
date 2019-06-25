@@ -20,17 +20,18 @@ from auto_yolo.models.core import AP, Updater as _Updater, Evaluator
 
 from spair_video.core import VideoNetwork, MOTMetrics
 
-from sqair.sqair_modules import Propagate, Discover
+from sqair.sqair_modules import FastPropagate, Propagate, FastDiscover, Discover
 from sqair.core import DiscoveryCore, PropagationCore
 from sqair.modules import (
     Encoder, StochasticTransformParam, FixedStepsPredictor, StepsPredictor,
     Decoder, AIRDecoder, AIREncoder, SpatialTransformer
 )
 from sqair.seq import SequentialAIR
-from sqair.propagate import make_prior, SequentialSSM
+from sqair.propagate import make_prior
 from sqair import index
 from sqair import targets
 from sqair import ops
+from sqair.neural import MLP
 
 
 class SQAIRUpdater(_Updater):
@@ -249,6 +250,7 @@ class SQAIRUpdater(_Updater):
         resampled_names = (
             'obj_id canvas glimpse presence_prob presence presence_logit '
             'where_coords num_steps_per_sample'.split())
+
         for name in resampled_names:
             try:
                 resampled_tensor = self.resample(self.tensors[name], axis=1)
@@ -347,6 +349,9 @@ class SQAIR(VideoNetwork):
     debug = Param()
     masked_glimpse = Param()
 
+    fast_discovery = Param()
+    fast_propagation = Param()
+
     n_hidden = Param()
     n_layers = Param()
 
@@ -355,7 +360,6 @@ class SQAIR(VideoNetwork):
     scale_prior = Param()
     rec_where_prior = Param()
 
-    training_wheels = Param()
     k_particles = Param()
 
     prior_start_step = Param()
@@ -378,7 +382,6 @@ class SQAIR(VideoNetwork):
         self.eval_funcs["prior_AP"] = SQAIR_Prior_AP(ap_iou_values, start_frame=self.eval_prior_start_step)
         self.eval_funcs["prior_MOT"] = SQAIR_Prior_MOTMetrics(start_frame=self.eval_prior_start_step)
 
-        self.training_wheels = build_scheduled_value(self.training_wheels, "training_wheels")
         super().__init__(env, updater, scope=scope, **kwargs)
 
     def build_representation(self):
@@ -403,15 +406,12 @@ class SQAIR(VideoNetwork):
 
         steps_pred_hidden = self.n_hidden / 2
 
-        training_wheels = self.training_wheels
-
         transform_estimator = partial(StochasticTransformParam, layers, self.transform_var_bias)
 
         if self.fixed_presence:
             disc_steps_predictor = partial(FixedStepsPredictor, discovery=True)
         else:
-            disc_steps_predictor = partial(
-                StepsPredictor, steps_pred_hidden, self.disc_step_bias, training_wheels=training_wheels)
+            disc_steps_predictor = partial(StepsPredictor, steps_pred_hidden, self.disc_step_bias)
 
         if cfg.build_input_encoder is None:
             input_encoder = partial(Encoder, layers)
@@ -426,16 +426,23 @@ class SQAIR(VideoNetwork):
         encoded_input = tf.reshape(encoded_input, (T, B, *tf_shape(encoded_input)[1:]))
 
         with tf.variable_scope('discovery'):
-            discover_cell = DiscoveryCore(encoded_input, img_size, self.object_shape, self.n_what,
-                                          self.rnn_class(self.n_hidden),
-                                          glimpse_encoder, transform_estimator, disc_steps_predictor,
-                                          debug=self.debug, training_wheels=training_wheels)
 
-            discover = Discover(self.n_steps_per_image, discover_cell,
-                                step_success_prob=self.step_success_prob,
-                                where_mean=[*self.scale_prior, 0, 0],
-                                disc_prior_type=self.disc_prior_type,
-                                rec_where_prior=self.rec_where_prior)
+            discover_cell = DiscoveryCore(
+                processed_image, encoded_input, self.object_shape, self.n_what, self.rnn_class(self.n_hidden),
+                glimpse_encoder, transform_estimator, disc_steps_predictor, debug=self.debug)
+
+            if self.fast_discovery:
+                object_state_predictor = MLP([256, 256, self.n_hidden])
+                discover = FastDiscover(
+                    object_state_predictor, self.n_steps_per_image, discover_cell,
+                    step_success_prob=self.step_success_prob, where_mean=[*self.scale_prior, 0, 0],
+                    disc_prior_type=self.disc_prior_type, rec_where_prior=self.rec_where_prior)
+
+            else:
+                discover = Discover(
+                    self.n_steps_per_image, discover_cell, step_success_prob=self.step_success_prob,
+                    where_mean=[*self.scale_prior, 0, 0], disc_prior_type=self.disc_prior_type,
+                    rec_where_prior=self.rec_where_prior)
 
         with tf.variable_scope('propagation'):
             # Prop cell should have a different rnn cell but should share all other estimators
@@ -447,19 +454,20 @@ class SQAIR(VideoNetwork):
             else:
                 prop_steps_predictor = partial(StepsPredictor, steps_pred_hidden, self.prop_step_bias)
 
-            # Prop cell should have a different rnn cell but should share all other estimators
-            propagate_rnn_cell = self.rnn_class(self.n_hidden)
-            temporal_rnn_cell = self.time_rnn_class(self.n_hidden)
-            propagation_cell = PropagationCore(encoded_input, img_size, self.object_shape, self.n_what,
-                                               propagate_rnn_cell, glimpse_encoder, transform_estimator,
-                                               prop_steps_predictor, temporal_rnn_cell,
-                                               debug=self.debug, training_wheels=training_wheels)
-            ssm = SequentialSSM(propagation_cell)
-
             prior_rnn = self.prior_rnn_class(self.n_hidden)
             propagation_prior = make_prior(self.prop_prior_type, self.n_what, prior_rnn, self.prop_prior_step_bias)
 
-            propagate = Propagate(ssm, propagation_prior)
+            propagate_rnn_cell = self.rnn_class(self.n_hidden)
+            temporal_rnn_cell = self.time_rnn_class(self.n_hidden)
+
+            propagation_cell = PropagationCore(processed_image, encoded_input, self.object_shape, self.n_what,
+                                               propagate_rnn_cell, glimpse_encoder, transform_estimator,
+                                               prop_steps_predictor, temporal_rnn_cell, debug=self.debug)
+
+            if self.fast_propagation:
+                propagate = FastPropagate(propagation_cell, propagation_prior)
+            else:
+                propagate = Propagate(propagation_cell, propagation_prior)
 
         with tf.variable_scope('decoder'):
             glimpse_decoder = partial(Decoder, layers, output_scale=self.output_scale)
