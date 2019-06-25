@@ -120,7 +120,6 @@ class VideoNetwork(TensorRecorder):
         super(VideoNetwork, self).__init__(scope=scope, **kwargs)
 
     def std_nonlinearity(self, std_logit):
-        # return tf.exp(std)
         std = 2 * tf.nn.sigmoid(tf.clip_by_value(std_logit, -10, 10))
         if not self.noisy:
             std = tf.zeros_like(std)

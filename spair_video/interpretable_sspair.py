@@ -17,6 +17,7 @@ from matplotlib.colors import to_rgb
 from dps import cfg
 from dps.utils import Param, map_structure, Config
 from dps.utils.tf import RenderHook, tf_mean_sum, tf_shape, MLP
+from dps.utils.tensor_arrays import apply_keys, append_to_tensor_arrays, make_tensor_arrays
 
 from auto_yolo.models.core import AP, xent_loss, coords_to_pixel_space
 from auto_yolo.models.object_layer import GridObjectLayer, ConvGridObjectLayer, ObjectRenderer
@@ -119,39 +120,6 @@ def select_top_k_objects(prop, disc):
     )
 
     return selected_objects
-
-
-def apply_keys(d, values):
-    new = type(d)()
-    for (k, v), _v in zip(sorted(d.items()), values):
-        if isinstance(_v, tf.Tensor):
-            new[k] = _v
-        else:
-            new[k] = apply_keys(v, _v)
-    return new
-
-
-def append_to_tensor_arrays(f, structured, tensor_arrays):
-    new_tensor_arrays = []
-    for (k, v), ta in zip(sorted(structured.items()), tensor_arrays):
-        if isinstance(v, tf.Tensor):
-            result = ta.write(f, v)
-        else:
-            result = append_to_tensor_arrays(f, v, ta)
-        new_tensor_arrays.append(result)
-    return new_tensor_arrays
-
-
-def make_tensor_arrays(structure, n_frames):
-    tas = []
-    for k, v in sorted(structure.items()):
-        if isinstance(v, tf.Tensor):
-            ta = tf.TensorArray(v.dtype, n_frames, dynamic_size=False, element_shape=v.shape)
-            tas.append(ta)
-        else:
-            _tas = make_tensor_arrays(v, n_frames)
-            tas.append(_tas)
-    return tas
 
 
 class Prior_AP(AP):
@@ -484,7 +452,6 @@ class InterpretableSequentialSpair(VideoNetwork):
         x, y = np.meshgrid(x, y)
         self.grid_cell_centers = tf.constant(np.concatenate([y.flatten()[:, None], x.flatten()[:, None]], axis=1))
 
-        tensors = []
         objects = self.prop_layer.null_object_set(self.batch_size)
 
         f = tf.constant(0, dtype=tf.int32)

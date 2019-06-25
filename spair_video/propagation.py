@@ -16,7 +16,7 @@ from auto_yolo.models.networks import SpatialAttentionLayerV2
 
 
 def extract_affine_glimpse(image, object_shape, cyt, cxt, ys, xs, edge_resampler):
-    """ (yt, xt) are rectangle center. (ys, xs) are rectangle height/width """
+    """ (cyt, cxt) are rectangle center. (ys, xs) are rectangle height/width """
     _, *image_shape, image_depth = tf_shape(image)
     transform_constraints = snt.AffineWarpConstraints.no_shear_2d()
     warper = snt.AffineGridWarper(image_shape, object_shape, transform_constraints)

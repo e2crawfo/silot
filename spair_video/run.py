@@ -13,7 +13,7 @@ from dps.config import DEFAULT_CONFIG
 from auto_yolo.models.core import Updater
 
 from spair_video.core import SimpleVideoVAE, SimpleVAE_RenderHook, BackgroundExtractor
-from spair_video.tracking_by_animation import TrackingByAnimation, TbaBackbone, TBA_RenderHook
+from spair_video.tba import TrackingByAnimation, TBA_Backbone, TBA_RenderHook
 from spair_video.seq_air import SQAIR, SQAIRUpdater, SQAIR_RenderHook
 from spair_video.sspair import SequentialSpair, SequentialSpair_RenderHook
 from spair_video.interpretable_sspair import InterpretableSequentialSpair, ISSPAIR_RenderHook
@@ -60,9 +60,9 @@ basic_config = DEFAULT_CONFIG.copy(
     use_gpu=True,
     gpu_allow_growth=True,
     stopping_criteria="loss,min",
+    threshold=-np.inf,
     max_experiments=None,
     preserve_env=False,
-    threshold=-np.inf,
     load_path=None,
     start_tensorboard=10,
     render_final=False,
@@ -289,34 +289,6 @@ alg_configs = dict(
             MLP(n_units=[128], scope="GRU"), 2*128),
         render_hook=SimpleVAE_RenderHook(),
     ),
-    tracking_by_animation=Config(
-        # This is the config used for Sprites dataset in the paper
-
-        build_network=TrackingByAnimation,
-
-        build_backbone=TbaBackbone,
-        build_cell=lambda scope, n_hidden: tf.contrib.rnn.GRUBlockCellV2(n_hidden),
-        build_key_network=lambda scope: MLP(n_units=[], scope=scope),
-        build_write_network=lambda scope: MLP(n_units=[], scope=scope),
-        build_output_network=lambda scope: MLP(n_units=[377], scope=scope),
-        # another possibility, not clear from the paper:
-        # build_output_network=lambda scope: MLP(n_units=[80, 377], scope=scope),
-
-        lr=5e-4,
-
-        lmbda=0.0,
-        # lmbda=1.0,
-        n_trackers=4,
-        n_layers=3,
-        n_hidden=80,
-        S=20,
-        eta=(0.2, 0.2),
-        prioritize=True,
-        anchor_box=(21, 21),
-        render_hook=TBA_RenderHook(),
-        # fixed_values=dict(conf=1.),
-        discrete_eval=False,
-    ),
     sspair=Config(
         build_network=SequentialSpair,
         render_hook=SequentialSpair_RenderHook(),
@@ -469,6 +441,9 @@ alg_configs["background_only"] = dict(
 
 alg_configs["isspair"] = alg_configs["sspair"].copy(
     render_hook=ISSPAIR_RenderHook(),
+
+    stopping_criteria="mota_post_prior_sum,max",
+    threshold=np.inf,
 
     prior_start_step=-1,
     eval_prior_start_step=3,
@@ -669,9 +644,8 @@ alg_configs["test_isspair"] = alg_configs["isspair"].copy(
 # --- SQAIR ---
 
 alg_configs['sqair'] = Config(
-    # stopping_criteria="MOT:mota,max",
-    # stopping_criteria="AP,max",
-    # threshold=np.inf,
+    stopping_criteria="mota_post_prior_sum,max",
+    threshold=np.inf,
 
     get_updater=SQAIRUpdater,
     build_network=SQAIR,
@@ -765,6 +739,54 @@ alg_configs['conv_fixed_sqair'] = alg_configs['fixed_sqair'].copy(
         )
     ),
     k_particles=3,
+)
+
+# --- TBA ---
+
+alg_configs['tba_shapes'] = Config(
+    build_network=TrackingByAnimation,
+
+    build_backbone=TBA_Backbone,
+    build_cell=snt.GRU,
+
+    build_key_network=lambda scope: MLP(n_units=[], scope=scope),
+    build_write_network=lambda scope: MLP(n_units=[], scope=scope),
+    build_output_network=lambda scope: MLP(n_units=[80, 377], scope=scope),
+
+    optimizer_spec="weight_decay_adam,decay=1e-6",
+    lr=5e-4,
+    max_grad_norm=5,
+
+    # lmbda=13.0,
+    lmbda=1.0,  # paper say 1, but 13 is used in the code for mnist and sprites
+    n_trackers=4,
+    n_layers=3,
+
+    # number of units in hidden states for each object is set to be 4 * # of conv features at output
+    n_hidden=80,
+    S=20,
+
+    # in the code they use 0.1 (look at scripts/gen_sprite.py), but the paper says 0.2
+    # might be equivalent in different spaces
+    eta=(0.1, 0.1),
+
+    prioritize=False,  # for debugging
+    # prioritize=True,
+    anchor_box=(21, 21),
+    render_hook=TBA_RenderHook(),
+    discrete_eval=False,
+    learn_initial_state=True,
+)
+
+alg_configs['tba_mnist'] = alg_configs['tba_shapes'].copy(
+    n_layers=1,
+    n_hidden=200,
+    S=50,
+    build_output_network=lambda scope: MLP(n_units=[200, 397], scope=scope),
+
+    anchor_box=(14, 14),  # for original paper it's (28, 28), because the digits themselves are (28, 28)
+    # anchor_box=(28, 28),
+    eta=(0.0, 0.0),  # this is not a typo: they tell the network exactly what the size should be
 )
 
 # --- BASELINE ---

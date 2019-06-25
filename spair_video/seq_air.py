@@ -287,11 +287,6 @@ class SQAIR_AP(AP):
         return obj, predicted_n_digits, top, left, height, width, annotations, n_annotations
 
 
-class SQAIR_Prior_AP(SQAIR_AP):
-    def get_feed_dict(self, updater):
-        return {updater.network._prior_start_step: self.start_frame}
-
-
 class SQAIR_MOTMetrics(MOTMetrics):
     keys_accessed = (
         ["resampled_" + name for name in "obj_id where_coords num_steps_per_sample".split()]
@@ -321,6 +316,11 @@ class SQAIR_MOTMetrics(MOTMetrics):
         left = transformed_x - width / 2
 
         return obj, pred_n_objects, obj_id, top, left, height, width
+
+
+class SQAIR_Prior_AP(SQAIR_AP):
+    def get_feed_dict(self, updater):
+        return {updater.network._prior_start_step: self.start_frame}
 
 
 class SQAIR_Prior_MOTMetrics(SQAIR_MOTMetrics):
