@@ -12,7 +12,7 @@ distributions = None
 n = args.n_digits
 late_config.update(n_digits=n, min_digits=n, max_digits=n)
 
-readme = "Running ISSPAIR experiment on moving_mnist."
+readme = "Running SILOT experiment on moving_mnist."
 
 pmem = 15000
 project = "rpp-bengioy"
@@ -45,12 +45,12 @@ durations = dict(
 
 config = basic_config.copy()
 config.update(env_configs['moving_mnist'])
-config.update(alg_configs['exp_isspair'])
+config.update(alg_configs['exp_silot'])
 config.update(late_config)
 
 run_experiment(
-    "moving_mnist_isspair",
-    config, "isspair on moving_mnist.",
+    "moving_mnist_silot",
+    config, "silot on moving_mnist.",
     name_variables="n_digits",
     distributions=distributions, durations=durations
 )

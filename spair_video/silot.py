@@ -132,7 +132,7 @@ class Prior_MOTMetrics(MOTMetrics):
         return {updater.network._prior_start_step: self.start_frame}
 
 
-class InterpretableSequentialSpair(VideoNetwork):
+class SILOT(VideoNetwork):
     build_backbone = Param()
     build_discovery_feature_fuser = Param()
     build_mlp = Param()
@@ -589,7 +589,7 @@ class InterpretableSequentialSpair(VideoNetwork):
             )
 
 
-class ISSPAIR_RenderHook(RenderHook):
+class SILOT_RenderHook(RenderHook):
     N = 4
     linewidth = 2
     on_color = np.array(to_rgb("xkcd:azure"))

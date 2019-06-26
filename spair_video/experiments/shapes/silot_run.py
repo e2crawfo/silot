@@ -5,7 +5,7 @@ late_config = dict(max_steps=250000)
 
 distributions = None
 
-readme = "Running ISSPAIR experiment on hard_shapes."
+readme = "Running SILOT experiment on hard_shapes."
 
 pmem = 15000
 project = "rpp-bengioy"
@@ -33,11 +33,11 @@ durations = dict(
 
 config = basic_config.copy()
 config.update(env_configs['hard_shapes'])
-config.update(alg_configs['exp_isspair'])
+config.update(alg_configs['silot'])
 config.update(late_config)
 
 run_experiment(
-    "hard_shapes_isspair",
-    config, "isspair on hard_shapes.",
+    "hard_shapes_silot",
+    config, "SILOT on hard_shapes.",
     distributions=distributions, durations=durations
 )

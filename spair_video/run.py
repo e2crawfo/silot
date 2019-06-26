@@ -16,7 +16,7 @@ from spair_video.core import SimpleVideoVAE, SimpleVAE_RenderHook, BackgroundExt
 from spair_video.tba import TrackingByAnimation, TBA_Backbone, TBA_RenderHook
 from spair_video.seq_air import SQAIR, SQAIRUpdater, SQAIR_RenderHook
 from spair_video.sspair import SequentialSpair, SequentialSpair_RenderHook
-from spair_video.interpretable_sspair import InterpretableSequentialSpair, ISSPAIR_RenderHook
+from spair_video.interpretable_sspair import SILOT, SILOT_RenderHook
 from spair_video.background_only import BackgroundOnly, BackgroundOnly_RenderHook
 from spair_video.baseline import BaselineTracker, Baseline_RenderHook
 
@@ -437,10 +437,10 @@ alg_configs["background_only"] = dict(
 )
 
 
-# --- ISSPAIR ---
+# --- SILOT ---
 
-alg_configs["isspair"] = alg_configs["sspair"].copy(
-    render_hook=ISSPAIR_RenderHook(),
+alg_configs["silot"] = alg_configs["sspair"].copy(
+    render_hook=SILOT_RenderHook(),
 
     stopping_criteria="mota_post_prior_sum,max",
     threshold=np.inf,
@@ -456,7 +456,7 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
         ],
     ),
     build_prop_cell=snt.GRU,
-    build_network=InterpretableSequentialSpair,
+    build_network=SILOT,
     build_mlp=lambda scope: MLP(n_units=[64, 64], scope=scope),
 
     n_prop_objects=16,
@@ -509,12 +509,12 @@ alg_configs["isspair"] = alg_configs["sspair"].copy(
     ],
 )
 
-alg_configs["exp_isspair"] = alg_configs["isspair"].copy(
+alg_configs["exp_silot"] = alg_configs["silot"].copy(
     d_attr_prior_std=0.4,
     d_yx_prior_std=0.3,
 )
 
-alg_configs["conv_isspair"] = alg_configs["exp_isspair"].copy(
+alg_configs["conv_silot"] = alg_configs["exp_silot"].copy(
     conv_discovery=True,
     build_conv_lateral=lambda scope: ConvNet(
         scope=scope, layers=[
@@ -524,7 +524,7 @@ alg_configs["conv_isspair"] = alg_configs["exp_isspair"].copy(
     ),
 )
 
-alg_configs["restart_conv_isspair"] = alg_configs["conv_isspair"].copy(
+alg_configs["restart_conv_silot"] = alg_configs["conv_silot"].copy(
     initial_n_frames=8,
     initial_count_prior_log_odds=0.0125,
     end_training_wheels=1,
@@ -547,30 +547,30 @@ alg_configs["restart_conv_isspair"] = alg_configs["conv_isspair"].copy(
     ]
 )
 
-alg_configs["load_conv_isspair"] = alg_configs["conv_isspair"].copy(
+alg_configs["load_conv_silot"] = alg_configs["conv_silot"].copy(
     # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-sub/exp_alg=conv-isspair_2019_06_10_16_18_52_seed=1143638891/weights/best_of_stage_0",
     load_path="/media/data/dps_data/local_experiments/env=moving-mnist-sub/exp_alg=restart-conv-isspair_2019_06_12_12_09_40_seed=1267365617/weights/best_of_stage_0",
     n_train=100,
     noisy=False,
     do_train=False,
-    render_hook=ISSPAIR_RenderHook(),
+    render_hook=SILOT_RenderHook(),
 )
 
-alg_configs["shape_isspair"] = alg_configs["exp_isspair"].copy(
+alg_configs["shape_silot"] = alg_configs["exp_silot"].copy(
     color_logit_scale=1.0,
     alpha_logit_scale=1.0,
     alpha_logit_bias=3.0,
 )
 
-alg_configs["restart_isspair"] = alg_configs["exp_isspair"].copy(
+alg_configs["restart_silot"] = alg_configs["exp_silot"].copy(
     initial_n_frames=6,
     initial_count_prior_log_odds=0.0125,
     end_training_wheels=1,
     noise_schedule=0.0,
 )
 
-alg_configs["load_small_isspair"] = alg_configs["exp_isspair"].copy(
-    render_hook=ISSPAIR_RenderHook(N=16),
+alg_configs["load_small_silot"] = alg_configs["exp_silot"].copy(
+    render_hook=SILOT_RenderHook(N=16),
     load_path="/media/data/dps_data/local_experiments/test-spair-video_env=small-moving-mnist/exp_alg=exp-isspair_2019_05_16_00_28_54_seed=30001/weights/best_of_stage_0",
     n_train=32,
     noisy=False,
@@ -585,7 +585,7 @@ alg_configs["load_small_isspair"] = alg_configs["exp_isspair"].copy(
     max_digits=2,
 )
 
-alg_configs["load_isspair"] = alg_configs["exp_isspair"].copy(
+alg_configs["load_silot"] = alg_configs["exp_silot"].copy(
     load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=exp-isspair_2019_05_09_09_34_52_seed=893541943/weights/best_of_stage_0",
     # load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=isspair_seed=9239644_2019_05_07_08_49_23/weights/best_of_stage_0",
     n_train=4,
@@ -595,9 +595,9 @@ alg_configs["load_isspair"] = alg_configs["exp_isspair"].copy(
     initial_n_frames=4,
 )
 
-alg_configs["load_big_isspair"] = alg_configs["exp_isspair"].copy(
+alg_configs["load_big_silot"] = alg_configs["exp_silot"].copy(
     load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=exp-isspair_2019_05_16_20_15_20_seed=23123/weights/best_of_stage_0",
-    render_hook=ISSPAIR_RenderHook(N=16),
+    render_hook=SILOT_RenderHook(N=16),
     image_shape=(96, 96),
     tile_shape=(48, 48),
     min_digits=40,
@@ -610,7 +610,7 @@ alg_configs["load_big_isspair"] = alg_configs["exp_isspair"].copy(
     n_prop_objects=16*4,
 )
 
-alg_configs["test_isspair"] = alg_configs["isspair"].copy(
+alg_configs["test_silot"] = alg_configs["silot"].copy(
     build_mlp=lambda scope: MLP(n_units=[32, 32], scope=scope),
     build_lateral=lambda scope: MLP(n_units=[32, 32], scope=scope),
     build_object_encoder=lambda scope: MLP(n_units=[64, 64], scope=scope),

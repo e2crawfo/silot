@@ -2,7 +2,7 @@ import numpy as np
 from dps.hyper import run_experiment
 from spair_video.run import basic_config, alg_configs, env_configs
 
-readme = "Running ISSPAIR experiment."
+readme = "Running SILOT experiment."
 
 distributions = [
     dict(d_attr_prior_std=s) for s in [0.1, 0.2, 0.4, 0.8]
@@ -38,9 +38,9 @@ durations = dict(
 
 config = basic_config.copy()
 config.update(env_configs['moving_mnist'])
-config.update(alg_configs['exp_isspair'])
+config.update(alg_configs['exp_silot'])
 
 run_experiment(
-    "test_isspair", config, "First test of spair_video.",
+    "test_silot", config, "First test of spair_video.",
     distributions=distributions, durations=durations
 )
