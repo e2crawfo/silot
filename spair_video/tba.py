@@ -52,63 +52,81 @@ class TBA_Backbone(GridConvNet):
 
 
 class TBA_AP(AP):
-    keys_accessed = (
-        ["resampled_" + name for name in "where_coords presence_prob num_steps_per_sample".split()]
-        + "annotations n_annotations".split()
-    )
+    keys_accessed = "normalized_box conf annotations n_annotations".split()
 
-    def _process_data(self, tensors, updater):
-        obj = tensors["resampled_presence_prob"]
-        predicted_n_digits = tensors['resampled_num_steps_per_sample']
-        w, h, x, y = np.split(tensors['resampled_where_coords'], 4, axis=3)
+    def _process_data(self, fetched, updater):
+        conf = fetched['conf']
 
-        transformed_x = 0.5 * (x + 1.) * updater.network.image_width
-        transformed_y = 0.5 * (y + 1.) * updater.network.image_height
+        nb = np.split(fetched['normalized_box'], 4, axis=-1)
+        top, left, height, width = tba_coords_to_pixel_space(
+            *nb, (updater.image_height, updater.image_width),
+            updater.network.anchor_box, top_left=True)
 
-        height = h * updater.network.image_height
-        width = w * updater.network.image_width
+        batch_size, n_frames, n_objects, *_ = conf.shape
+        shape = (batch_size, n_frames, n_objects)
 
-        top = transformed_y - height / 2
-        left = transformed_x - width / 2
+        predicted_n_digits = n_objects * np.ones((batch_size, n_frames), dtype=np.int32)
 
-        annotations = tensors["annotations"]
-        n_annotations = tensors["n_annotations"]
+        obj = conf.reshape(*shape)
+        top = top.reshape(*shape)
+        left = left.reshape(*shape)
+        height = height.reshape(*shape)
+        width = width.reshape(*shape)
+
+        annotations = fetched["annotations"]
+        n_annotations = fetched["n_annotations"]
 
         return obj, predicted_n_digits, top, left, height, width, annotations, n_annotations
 
 
 class TBA_MOTMetrics(MOTMetrics):
-    keys_accessed = (
-        ["resampled_" + name for name in "obj_id where_coords num_steps_per_sample".split()]
-        + "annotations n_annotations dynamic_n_frames".split()
-    )
+    keys_accessed = "normalized_box conf annotations n_annotations".split()
 
-    def _process_data(self, tensors, updater):
-        pred_n_objects = tensors['resampled_num_steps_per_sample']
-        obj_id = tensors['resampled_obj_id']
+    def _process_data(self, fetched, updater):
+        """
+        Use a confidence threshold of 0.5. Note that SILOT and SQAIR both do this as well.
+        For MOT there is no precision/recall balance, so you only want to include objects
+        you are sure of (in the case of AP, the confidence ordering takes care of it).
+        """
+        conf = fetched['conf']
 
-        shape = obj_id.shape
-        obj = (obj_id != -1).astype('i')
+        nb = np.split(fetched['normalized_box'], 4, axis=-1)
+        top, left, height, width = tba_coords_to_pixel_space(
+            *nb, (updater.image_height, updater.image_width),
+            updater.network.anchor_box, top_left=True)
 
-        w, h, x, y = np.split(tensors['resampled_where_coords'], 4, axis=3)
-        w = w.reshape(shape)
-        h = h.reshape(shape)
-        x = x.reshape(shape)
-        y = y.reshape(shape)
+        batch_size, n_frames, n_objects, *_ = conf.shape
+        shape = (batch_size, n_frames, n_objects)
 
-        transformed_x = 0.5 * (x + 1.) * updater.network.image_width
-        transformed_y = 0.5 * (y + 1.) * updater.network.image_height
+        obj = conf.reshape(*shape)
+        top = top.reshape(*shape)
+        left = left.reshape(*shape)
+        height = height.reshape(*shape)
+        width = width.reshape(*shape)
 
-        height = h * updater.network.image_height
-        width = w * updater.network.image_width
+        B, F, n_objects = shape
+        pred_ids = np.zeros((B, F), dtype=np.object)
 
-        top = transformed_y - height / 2
-        left = transformed_x - width / 2
+        for b in range(B):
+            next_id = 0
+            ids = [-1] * n_objects
 
-        return obj, pred_n_objects, obj_id, top, left, height, width
+            for f in range(F):
+                _pred_ids = []
+                for i in range(n_objects):
+                    if obj[b, f, i] > 0.5:
+                        is_new = f == 0 or not (obj[b, f-1, i] > 0.5)
+                        if is_new:
+                            ids[i] = next_id
+                            next_id += 1
+                        _pred_ids.append(ids[i])
+                pred_ids[b, f] = _pred_ids
+
+        pred_n_digits = n_objects * np.ones((batch_size, n_frames), dtype=np.int32)
+        return obj, pred_n_digits, pred_ids, top, left, height, width
 
 
-def coords_to_pixel_space(y, x, h, w, image_shape, anchor_box, top_left):
+def tba_coords_to_pixel_space(y, x, h, w, image_shape, anchor_box, top_left):
     h = h * anchor_box[0]
     w = w * anchor_box[1]
 
@@ -122,11 +140,38 @@ def coords_to_pixel_space(y, x, h, w, image_shape, anchor_box, top_left):
     return y, x, h, w
 
 
+def tba_coords_to_image_space(y, x, h, w, image_shape, anchor_box, top_left):
+    h = h * anchor_box[0] / image_shape[0]
+    w = w * anchor_box[1] / image_shape[1]
+
+    y = 2 * y - 1
+    x = 2 * x - 1
+
+    if top_left:
+        y -= h / 2
+        x -= w / 2
+
+    return y, x, h, w
+
+
+@tf.custom_gradient
+def limit_grad_norm(x, max_norm):
+
+    def grad(dy):
+        axes = list(range(1, len(dy.shape)))
+        _dy = tf.clip_by_norm(dy, max_norm, axes=axes)
+        return _dy, tf.zeros_like(max_norm)
+
+    return tf.identity(x), grad
+
+
 class TrackingByAnimation(VideoNetwork):
     build_backbone = Param()
     build_cell = Param()
     build_key_network = Param()
+    build_beta_network = Param()
     build_write_network = Param()
+    build_erase_network = Param()
     build_output_network = Param()
 
     lmbda = Param()
@@ -140,11 +185,15 @@ class TrackingByAnimation(VideoNetwork):
     anchor_box = Param(help="Box with respect to which objects are scaled (y, x).")
     discrete_eval = Param()
     learn_initial_state = Param()
+    fixed_mask = Param()
+    clamp_appearance = Param()
 
     backbone = None
     cell = None
     key_network = None
+    beta_network = None
     write_network = None
+    erase_network = None
     output_network = None
     background_encoder = None
     background_decoder = None
@@ -161,6 +210,21 @@ class TrackingByAnimation(VideoNetwork):
 
         self.output_size_per_object = np.prod(self.object_shape) * (self.image_depth + 1) + 1 + 4 + self.n_layers
 
+    @property
+    def eval_funcs(self):
+        if getattr(self, '_eval_funcs', None) is None:
+            if "annotations" in self._tensors:
+                ap_iou_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+                eval_funcs = {"AP_at_point_{}".format(int(10 * v)): TBA_AP(v) for v in ap_iou_values}
+                eval_funcs["AP"] = TBA_AP(ap_iou_values)
+                eval_funcs["MOT"] = TBA_MOTMetrics()
+
+                self._eval_funcs = eval_funcs
+            else:
+                self._eval_funcs = {}
+
+        return self._eval_funcs
+
     def _loop_cond(self, f, *_):
         return f < self.dynamic_n_frames
 
@@ -169,11 +233,17 @@ class TrackingByAnimation(VideoNetwork):
 
         memory = self.encoded_frames[:, f]  # (batch_size, H*W, S)
 
+        delta = 0.0001 * tf.range(self.n_trackers, dtype=tf.float32)[:, None, None]
+        sort_criteria = tf.round(conf) - delta
+
+        sorted_order = tf.contrib.framework.argsort(sort_criteria, axis=0, direction='DESCENDING')
+        sorted_order = tf.reshape(sorted_order, (self.n_trackers, batch_size, 1))
+
         order = tf.cond(
             tf.logical_or(tf.equal(f, 0), not self.prioritize),
             lambda: tf.tile(tf.range(self.n_trackers)[:, None, None], (1, batch_size, 1)),
-            lambda: tf.contrib.framework.argsort(conf, axis=0, direction='DESCENDING')
-        )  # (n_trackers, batch_size, 1)
+            lambda: sorted_order,
+        )
         order = tf.reshape(order, (self.n_trackers, batch_size, 1))
 
         inverse_order = tf.contrib.framework.argsort(order, axis=0, direction='ASCENDING')
@@ -181,6 +251,8 @@ class TrackingByAnimation(VideoNetwork):
         tensors = defaultdict(list)
 
         for i in range(self.n_trackers):
+            tensors["memory_activation"].append(tf.reduce_mean(tf.abs(memory), axis=2))
+
             # --- apply ordering if applicable ---
 
             indices = order[i]  # (batch_size, 1)
@@ -189,12 +261,25 @@ class TrackingByAnimation(VideoNetwork):
 
             # --- access the memory using spatial attention ---
 
-            keys = self.key_network(_hidden_states, self.S+1, self.is_training)  # (batch_size, self.S+1)
-            keys, temperature_logit = tf.split(keys, [self.S, 1], axis=-1)
-            temperature = 1 + tf.math.softplus(temperature_logit)
-            key_activation = temperature * tf_cosine_similarity(memory, keys[:, None, :])  # (batch_size, H*W)
-            normed_key_activation = tf.nn.softmax(key_activation, axis=1)[:, :, None]  # (batch_size, H*W, 1)
-            attention_result = tf.reduce_sum(normed_key_activation * memory, axis=1)  # (batch_size, S)
+            keys = self.key_network(_hidden_states, self.S, self.is_training)  # (batch_size, self.S)
+            beta_logit = self.beta_network(_hidden_states, 1, self.is_training)  # (batch_size, 1)
+
+            # beta = 1 + tf.math.softplus(beta_logit)
+
+            beta_pos = tf.maximum(0.0, beta_logit)
+            beta_neg = tf.minimum(0.0, beta_logit)
+            beta = tf.log1p(tf.exp(beta_neg)) + beta_pos + tf.log1p(tf.exp(-beta_pos)) + (1 - np.log(2))
+
+            _memory = tf.identity(memory)
+            _memory = limit_grad_norm(_memory, 1.)
+
+            key_activation = beta * tf_cosine_similarity(_memory, keys[:, None, :])  # (batch_size, H*W)
+            attention_weights = tf.nn.softmax(key_activation, axis=1)[:, :, None]  # (batch_size, H*W, 1)
+
+            _attention_weights = tf.identity(attention_weights)
+            _attention_weights = limit_grad_norm(_attention_weights, 1.)
+
+            attention_result = tf.reduce_sum(_attention_weights * memory, axis=1)  # (batch_size, S)
 
             # --- update tracker hidden state and output ---
 
@@ -202,18 +287,19 @@ class TrackingByAnimation(VideoNetwork):
 
             # --- update the memory for the next trackers ---
 
-            write = self.write_network(tracker_output, 2*self.S, self.is_training)
-            erase, write = tf.split(write, 2, axis=-1)
+            write = self.write_network(tracker_output, self.S, self.is_training)
+            erase = self.erase_network(tracker_output, self.S, self.is_training)
             erase = tf.nn.sigmoid(erase)
 
             memory = (
-                (1 - normed_key_activation * erase[:, None, :]) * memory
-                + normed_key_activation * write[:, None, :]
+                (1 - attention_weights * erase[:, None, :]) * memory
+                + attention_weights * write[:, None, :]
             )
 
             tensors["hidden_states"].append(new_hidden)
             tensors["tracker_output"].append(tracker_output)
             tensors["attention_result"].append(attention_result)
+            tensors["attention_weights"].append(attention_weights[..., 0])
 
         tensors = {k: tf.stack(v, axis=0) for k, v in tensors.items()}
 
@@ -235,25 +321,30 @@ class TrackingByAnimation(VideoNetwork):
             axis=-1)
 
         conf = tf.abs(tf.nn.tanh(conf))
-        # conf = tf.nn.sigmoid(conf)
 
         conf = (
             self.float_is_training * conf
             + (1 - self.float_is_training) * tf.round(conf)
         )
 
-        layer = tfp.distributions.RelaxedOneHotCategorical(self.layer_temperature, logits=layer).sample()
+        layer = tf.nn.softmax(layer, axis=-1)
+        layer = tf.transpose(layer, (1, 0, 2))
+        layer = limit_grad_norm(layer, 10.)
+        layer = tf.transpose(layer, (1, 0, 2))
+        layer = tfp.distributions.RelaxedOneHotCategorical(self.layer_temperature, probs=layer).sample()
 
         pose = tf.nn.tanh(pose)
 
         mask = tfp.distributions.RelaxedBernoulli(self.mask_temperature, logits=mask).sample()
+
+        if self.fixed_mask:
+            mask = tf.ones_like(mask)
+
         appearance = tf.nn.sigmoid(appearance)
 
         output = dict(
-            conf=conf, layer=layer, pose=pose,
-            mask=mask, appearance=appearance, order=order,
+            conf=conf, layer=layer, pose=pose, mask=mask, appearance=appearance, order=order, **tensors
         )
-        output.update(tensors)
 
         tensor_arrays = append_to_tensor_arrays(f, output, tensor_arrays)
 
@@ -267,9 +358,6 @@ class TrackingByAnimation(VideoNetwork):
         if self.backbone is None:
             self.backbone = self.build_backbone(scope="backbone")
 
-            if "backbone" in self.fixed_weights:
-                self.backbone.fix_variables()
-
         if self.cell is None:
             self.cell = cfg.build_cell(self.n_hidden, name="cell")
 
@@ -281,18 +369,15 @@ class TrackingByAnimation(VideoNetwork):
 
         if self.key_network is None:
             self.key_network = cfg.build_key_network(scope="key_network")
-            if "key_network" in self.fixed_weights:
-                self.key_network.fix_variables()
-
+        if self.beta_network is None:
+            self.beta_network = cfg.build_beta_network(scope="beta_network")
         if self.write_network is None:
             self.write_network = cfg.build_write_network(scope="write_network")
-            if "write_network" in self.fixed_weights:
-                self.write_network.fix_variables()
+        if self.erase_network is None:
+            self.erase_network = cfg.build_erase_network(scope="erase_network")
 
         if self.output_network is None:
             self.output_network = cfg.build_output_network(scope="output_network")
-            if "output_network" in self.fixed_weights:
-                self.output_network.fix_variables()
 
         d_n_frames, n_trackers, batch_size = self.dynamic_n_frames, self.n_trackers, self.batch_size
 
@@ -309,7 +394,9 @@ class TrackingByAnimation(VideoNetwork):
 
         encoded_frames, _, _ = self.backbone(video, self.S, self.is_training)
 
-        _, H, W, _ = encoded_frames.shape
+        _, H, W, _ = tf_shape(encoded_frames)
+        self.H = H
+        self.W = W
         encoded_frames = tf.reshape(encoded_frames, (batch_size, d_n_frames, H*W, self.S))
         self.encoded_frames = encoded_frames
 
@@ -333,6 +420,8 @@ class TrackingByAnimation(VideoNetwork):
             hidden_states=hidden_states,
             tracker_output=tf.zeros((self.n_trackers, self.batch_size, self.n_hidden)),
             attention_result=tf.zeros((self.n_trackers, self.batch_size, self.S)),
+            attention_weights=tf.zeros((self.n_trackers, self.batch_size, H*W)),
+            memory_activation=tf.zeros((self.n_trackers, self.batch_size, H*W)),
             conf=conf,
             layer=tf.zeros((self.n_trackers, self.batch_size, self.n_layers)),
             pose=tf.zeros((self.n_trackers, self.batch_size, 4)),
@@ -367,7 +456,7 @@ class TrackingByAnimation(VideoNetwork):
         self.record_tensors(conf=tensors["conf"], ys=ys, xs=xs, yt=yt, xt=xt,)
 
         yt_normed = (yt + 1) / 2
-        xt_normed = (yt + 1) / 2
+        xt_normed = (xt + 1) / 2
         ys_normed = 1 + self.eta[0] * ys
         xs_normed = 1 + self.eta[1] * xs
 
@@ -390,8 +479,12 @@ class TrackingByAnimation(VideoNetwork):
         N = batch_size * d_n_frames * n_trackers
         ys_normed = tf.reshape(ys_normed, (N, 1))
         xs_normed = tf.reshape(xs_normed, (N, 1))
-        yt = tf.reshape(yt, (N, 1))
-        xt = tf.reshape(xt, (N, 1))
+        yt_normed = tf.reshape(yt_normed, (N, 1))
+        xt_normed = tf.reshape(xt_normed, (N, 1))
+
+        _yt, _xt, _ys, _xs = tba_coords_to_image_space(
+            yt_normed, xt_normed, ys_normed, xs_normed,
+            (self.image_height, self.image_width), self.anchor_box, top_left=False)
 
         mask = tf.reshape(tensors["mask"], (N, *self.object_shape, 1))
         appearance = tf.reshape(tensors["appearance"], (N, *self.object_shape, self.image_depth))
@@ -400,7 +493,7 @@ class TrackingByAnimation(VideoNetwork):
         warper = snt.AffineGridWarper(
             (self.image_height, self.image_width), self.object_shape, transform_constraints)
         inverse_warper = warper.inverse()
-        transforms = tf.concat([xs_normed, xt, ys_normed, yt], axis=-1)
+        transforms = tf.concat([_xs, _xt, _ys, _yt], axis=-1)
         grid_coords = inverse_warper(transforms)
 
         transformed_masks = tf.contrib.resampler.resampler(mask, grid_coords)
@@ -415,7 +508,6 @@ class TrackingByAnimation(VideoNetwork):
 
         layer_masks = []
         layer_appearances = []
-        partial_frames = []
 
         conf = tensors["conf"][:, :, :, :, None, None]
 
@@ -423,25 +515,24 @@ class TrackingByAnimation(VideoNetwork):
 
         final_frames = tf.zeros((batch_size, d_n_frames, self.image_height, self.image_width, self.image_depth))
 
-        # TODO: on mnist, the shape/mask is replaced with all 1's...
-
         # For each layer, create a mask image and an appearance image
         for layer_idx in range(self.n_layers):
             layer_weight = tensors["layer"][:, :, :, layer_idx, None, None, None]
 
             # (batch_size, n_frames, self.image_height, self.image_width, 1)
-            layer_mask = tf.minimum(1.0, tf.reduce_sum(conf * layer_weight * transformed_masks, axis=2))
-
-            # vvv in pytorch code, layer_appearance is clamped to < 1 for MNIST only...
+            layer_mask = tf.reduce_sum(conf * layer_weight * transformed_masks, axis=2)
+            layer_mask = tf.minimum(1.0, layer_mask)
 
             # (batch_size, n_frames, self.image_height, self.image_width, 3)
             layer_appearance = tf.reduce_sum(conf * layer_weight * transformed_masks * transformed_appearances, axis=2)
+
+            if self.clamp_appearance:
+                layer_appearance = tf.minimum(1.0, layer_appearance)
 
             final_frames = (1 - layer_mask) * final_frames + layer_appearance
 
             layer_masks.append(layer_mask)
             layer_appearances.append(layer_appearance)
-            partial_frames.append(final_frames)
 
         self._tensors["output"] = final_frames
 
@@ -460,9 +551,16 @@ class TrackingByAnimation(VideoNetwork):
 
 class TBA_RenderHook(RenderHook):
     N = 4
+    linewidth = 4
+    gt_color = "xkcd:yellow"
+    gt_color2 = "xkcd:fire engine red"
 
     def build_fetches(self, updater):
-        return "inp output normalized_box appearance mask conf layer order tracker_output attention_result".split()
+        fetches = ("inp output normalized_box appearance mask conf layer order "
+                   "tracker_output attention_result memory_activation attention_weights ")
+        if "n_annotations" in updater.network._tensors:
+            fetches += " annotations n_annotations"
+        return fetches.split()
 
     def __call__(self, updater):
         fetched = self._fetch(updater)
@@ -477,9 +575,9 @@ class TBA_RenderHook(RenderHook):
         inp = fetched['inp']
         output = fetched['output']
 
-        yt, xt, ys, xs = np.split(fetched['normalized_box'], 4, axis=-1)
-        pixel_space_box = coords_to_pixel_space(
-            yt, xt, ys, xs, (updater.image_height, updater.image_width),
+        nb = np.split(fetched['normalized_box'], 4, axis=-1)
+        pixel_space_box = tba_coords_to_pixel_space(
+            *nb, (updater.image_height, updater.image_width),
             updater.network.anchor_box, top_left=True)
         pixel_space_box = np.concatenate(pixel_space_box, axis=-1)
 
@@ -487,16 +585,26 @@ class TBA_RenderHook(RenderHook):
         layer = fetched['layer']
         order = fetched['order']
 
+        H, W = updater.network.H, updater.network.W
+        attention_weights = fetched['attention_weights']
+        attention_weights = attention_weights.reshape(*attention_weights.shape[:-1], H, W)
+        memory_activation = fetched['memory_activation']
+        memory_activation = memory_activation.reshape(*memory_activation.shape[:-1], H, W)
+
         mask = fetched['mask']
         appearance = fetched['appearance']
+
+        annotations = fetched.get('annotations', None)
+        n_annotations = fetched.get('n_annotations', np.zeros(inp.shape[0], dtype='i'))
 
         diff = self.normalize_images(np.abs(inp - output).sum(axis=-1, keepdims=True) / output.shape[-1])
         xent = self.normalize_images(xent_loss(pred=output, label=inp, tf=False).sum(axis=-1, keepdims=True))
 
         B, T = inp.shape[:2]
         print("Plotting for {} data points...".format(B))
-        n_base_images = 7
-        n_images = n_base_images + 2 * updater.network.n_trackers
+        n_base_images = 8
+        n_images_per_obj = 4
+        n_images = n_base_images + n_images_per_obj * updater.network.n_trackers
 
         fig_unit_size = 4
         fig_height = T * fig_unit_size
@@ -547,18 +655,56 @@ class TBA_RenderHook(RenderHook):
                 if t == 0:
                     ax.set_title('order')
 
-                ax = axes[t, 6]
-                self.imshow(ax, output[b, t])
+                gt_ax = axes[t, 6]
+                self.imshow(gt_ax, inp[b, t])
                 if t == 0:
-                    ax.set_title('rec with boxes')
+                    gt_ax.set_title('gt with boxes')
+
+                rec_ax = axes[t, 7]
+                self.imshow(rec_ax, output[b, t])
+                if t == 0:
+                    rec_ax.set_title('rec with boxes')
+
+                # Plot true bounding boxes
+                for k in range(n_annotations[b]):
+                    valid, _, _, top, bottom, left, right = annotations[b, t, k]
+
+                    if not valid:
+                        continue
+
+                    height = bottom - top
+                    width = right - left
+
+                    # make a striped rectangle by superimposing two rectangles with different linestyles
+
+                    rect = patches.Rectangle(
+                        (left, top), width, height, linewidth=self.linewidth,
+                        edgecolor=self.gt_color, facecolor='none', linestyle="-")
+                    gt_ax.add_patch(rect)
+                    rect = patches.Rectangle(
+                        (left, top), width, height, linewidth=self.linewidth,
+                        edgecolor=self.gt_color2, facecolor='none', linestyle=":")
+                    gt_ax.add_patch(rect)
+
+                    rect = patches.Rectangle(
+                        (left, top), width, height, linewidth=self.linewidth,
+                        edgecolor=self.gt_color, facecolor='none', linestyle="-")
+                    rec_ax.add_patch(rect)
+                    rect = patches.Rectangle(
+                        (left, top), width, height, linewidth=self.linewidth,
+                        edgecolor=self.gt_color2, facecolor='none', linestyle=":")
+                    rec_ax.add_patch(rect)
 
                 for i in range(updater.network.n_trackers):
                     top, left, height, width = pixel_space_box[b, t, i]
                     rect = patches.Rectangle(
                         (left, top), width, height, linewidth=6, edgecolor=colours[i], facecolor='none')
-                    ax.add_patch(rect)
+                    gt_ax.add_patch(rect)
+                    rect = patches.Rectangle(
+                        (left, top), width, height, linewidth=6, edgecolor=colours[i], facecolor='none')
+                    rec_ax.add_patch(rect)
 
-                    ax_appearance = axes[t, n_base_images+2*i]
+                    ax_appearance = axes[t, n_base_images+n_images_per_obj*i]
                     self.imshow(ax_appearance, appearance[b, t, i])
                     rect = patches.Rectangle(
                         (-0.05, -0.05), 1.1, 1.1, clip_on=False, linewidth=20,
@@ -567,7 +713,7 @@ class TBA_RenderHook(RenderHook):
                     if t == 0:
                         ax_appearance.set_title('appearance {}'.format(i))
 
-                    ax_mask = axes[t, n_base_images+2*i+1]
+                    ax_mask = axes[t, n_base_images+n_images_per_obj*i+1]
                     self.imshow(ax_mask, mask[b, t, i])
                     rect = patches.Rectangle(
                         (-0.05, -0.05), 1.1, 1.1, clip_on=False, linewidth=20,
@@ -575,6 +721,24 @@ class TBA_RenderHook(RenderHook):
                     ax_mask.add_patch(rect)
                     if t == 0:
                         ax_mask.set_title('mask {}'.format(i))
+
+                    ax_mem = axes[t, n_base_images+n_images_per_obj*i+2]
+                    self.imshow(ax_mem, memory_activation[b, t, i])
+                    rect = patches.Rectangle(
+                        (-0.05, -0.05), 1.1, 1.1, clip_on=False, linewidth=20,
+                        transform=ax_mem.transAxes, edgecolor=colours[i], facecolor='none')
+                    ax_mem.add_patch(rect)
+                    if t == 0:
+                        ax_mem.set_title('memory_activation {}'.format(i))
+
+                    ax_att = axes[t, n_base_images+n_images_per_obj*i+3]
+                    self.imshow(ax_att, attention_weights[b, t, i])
+                    rect = patches.Rectangle(
+                        (-0.05, -0.05), 1.1, 1.1, clip_on=False, linewidth=20,
+                        transform=ax_att.transAxes, edgecolor=colours[i], facecolor='none')
+                    ax_att.add_patch(rect)
+                    if t == 0:
+                        ax_att.set_title('attention_weights {}'.format(i))
 
             plt.subplots_adjust(left=0.02, right=.98, top=.98, bottom=0.02, wspace=0.1, hspace=0.1)
             self.savefig("tba/" + str(b), fig, updater)

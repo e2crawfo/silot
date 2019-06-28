@@ -183,6 +183,14 @@ env_configs['moving_mnist_small'] = env_configs['moving_mnist'].copy(
     max_digits=4,
 )
 
+env_configs['moving_mnist_extra_small'] = env_configs['moving_mnist'].copy(
+    image_shape=(28, 28),
+    tile_shape=(28, 28),
+    n_objects=1,
+    min_digits=1,
+    max_digits=1,
+)
+
 env_configs["mnist_learned_background"] = env_configs["moving_mnist"].copy(
     build_background_encoder=lambda scope: BackgroundExtractor(
         scope=scope,
@@ -750,13 +758,19 @@ alg_configs['conv_fixed_sqair'] = alg_configs['fixed_sqair'].copy(
 # --- TBA ---
 
 alg_configs['tba_shapes'] = Config(
+    # TODO: maybe change this
+    stopping_criteria='loss,min',
+    threshold=-np.inf,
+
     build_network=TrackingByAnimation,
 
     build_backbone=TBA_Backbone,
     build_cell=snt.GRU,
 
     build_key_network=lambda scope: MLP(n_units=[], scope=scope),
+    build_beta_network=lambda scope: MLP(n_units=[], scope=scope),
     build_write_network=lambda scope: MLP(n_units=[], scope=scope),
+    build_erase_network=lambda scope: MLP(n_units=[], scope=scope),
     build_output_network=lambda scope: MLP(n_units=[80, 377], scope=scope),
 
     optimizer_spec="weight_decay_adam,decay=1e-6",
@@ -764,11 +778,12 @@ alg_configs['tba_shapes'] = Config(
     max_grad_norm=5,
 
     # lmbda=13.0,
-    lmbda=1.0,  # paper say 1, but 13 is used in the code for mnist and sprites
+    lmbda=1.0,  # paper says 1, but 13 is used in the code for mnist and sprites
+    # n_trackers=1,
     n_trackers=4,
     n_layers=3,
 
-    # number of units in hidden states for each object is set to be 4 * # of conv features at output
+    # number of units in hidden states for each object is set to be 4 * (# of conv features at output)
     n_hidden=80,
     S=20,
 
@@ -776,12 +791,15 @@ alg_configs['tba_shapes'] = Config(
     # might be equivalent in different spaces
     eta=(0.1, 0.1),
 
-    prioritize=False,  # for debugging
-    # prioritize=True,
+    prioritize=True,
+    learn_initial_state=False,
     anchor_box=(21, 21),
     render_hook=TBA_RenderHook(),
     discrete_eval=False,
-    learn_initial_state=True,
+    fixed_mask=False,
+    clamp_appearance=False,
+
+    initial_n_frames=8,
 )
 
 alg_configs['tba_mnist'] = alg_configs['tba_shapes'].copy(
@@ -792,7 +810,11 @@ alg_configs['tba_mnist'] = alg_configs['tba_shapes'].copy(
 
     anchor_box=(14, 14),  # for original paper it's (28, 28), because the digits themselves are (28, 28)
     # anchor_box=(28, 28),
-    eta=(0.0, 0.0),  # this is not a typo: they tell the network exactly what the size should be
+    eta=(0.5, 0.5),  # this is not a typo: they tell the network exactly what the size should be
+    # TODO restore this
+    # eta=(0.0, 0.0),  # this is not a typo: they tell the network exactly what the size should be
+    fixed_mask=True,
+    clamp_appearance=True,
 )
 
 # --- BASELINE ---

@@ -27,12 +27,13 @@ class MOTMetrics:
     def _process_data(self, tensors, updater):
         obj = tensors['obj']
 
-        B, F, n_objects = shape = obj.shape[:3]
+        shape = obj.shape[:3]
         obj = obj.reshape(shape)
-        y, x, height, width = np.split(tensors['normalized_box'], 4, axis=-1)
-        image_shape = (updater.network.image_height, updater.network.image_width)
-        anchor_box = updater.network.anchor_box
-        top, left, height, width = coords_to_pixel_space(y, x, height, width, image_shape, anchor_box, top_left=True)
+
+        nb = np.split(tensors['normalized_box'], 4, axis=-1)
+        top, left, height, width = coords_to_pixel_space(
+            *nb, (updater.image_height, updater.image_width),
+            updater.network.anchor_box, top_left=True)
 
         top = top.reshape(shape)
         left = left.reshape(shape)
@@ -40,6 +41,7 @@ class MOTMetrics:
         width = width.reshape(shape)
 
         is_new = tensors['is_new']
+        B, F, n_objects = shape
         pred_ids = np.zeros((B, F), dtype=np.object)
 
         for b in range(B):

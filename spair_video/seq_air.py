@@ -292,7 +292,7 @@ class SQAIR_AP(AP):
 class SQAIR_MOTMetrics(MOTMetrics):
     keys_accessed = (
         ["resampled_" + name for name in "obj_id where_coords num_steps_per_sample".split()]
-        + "annotations n_annotations dynamic_n_frames".split()
+        + "annotations n_annotations".split()
     )
 
     def _process_data(self, tensors, updater):
