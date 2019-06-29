@@ -20,9 +20,16 @@ from auto_yolo.models.core import normal_vae, TensorRecorder, xent_loss, coords_
 class MOTMetrics:
     keys_accessed = "is_new normalized_box obj annotations n_annotations"
 
-    def __init__(self, start_frame=0, end_frame=np.inf):
+    def __init__(self, start_frame=0, end_frame=np.inf, is_training=False):
         self.start_frame = start_frame
         self.end_frame = end_frame
+        self.is_training = is_training
+
+    def get_feed_dict(self, updater):
+        if self.is_training:
+            return {updater.network.is_training: True}
+        else:
+            return {}
 
     def _process_data(self, tensors, updater):
         obj = tensors['obj']

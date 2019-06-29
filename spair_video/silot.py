@@ -178,7 +178,9 @@ class SILOT(VideoNetwork):
                 ap_iou_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
                 eval_funcs = {"AP_at_point_{}".format(int(10 * v)): AP(v) for v in ap_iou_values}
                 eval_funcs["AP"] = AP(ap_iou_values)
+                eval_funcs["AP_train"] = AP(ap_iou_values, is_training=True)
                 eval_funcs["MOT"] = MOTMetrics()
+                eval_funcs["MOT_train"] = MOTMetrics(is_training=True)
 
                 if self.learn_prior:
                     eval_funcs["prior_AP"] = Prior_AP(ap_iou_values, start_frame=self.eval_prior_start_step)

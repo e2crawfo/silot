@@ -217,7 +217,9 @@ class TrackingByAnimation(VideoNetwork):
                 ap_iou_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
                 eval_funcs = {"AP_at_point_{}".format(int(10 * v)): TBA_AP(v) for v in ap_iou_values}
                 eval_funcs["AP"] = TBA_AP(ap_iou_values)
+                eval_funcs["AP_train"] = TBA_AP(ap_iou_values, is_training=True)
                 eval_funcs["MOT"] = TBA_MOTMetrics()
+                eval_funcs["MOT_train"] = TBA_MOTMetrics(is_training=True)
 
                 self._eval_funcs = eval_funcs
             else:

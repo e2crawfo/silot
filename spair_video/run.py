@@ -119,9 +119,9 @@ env_configs['moving_mnist'] = Config(
     tile_shape=(48, 48),
     patch_shape=(14, 14),
     object_shape=(14, 14),
-    n_objects=8,
-    min_digits=8,
-    max_digits=8,
+    n_objects=12,
+    min_digits=1,
+    max_digits=12,
     max_overlap=14**2/2,
     n_classes=82,
     largest_digit=81,
@@ -500,9 +500,9 @@ alg_configs["silot"] = alg_configs["sspair"].copy(
     use_abs_posn=True,
     edge_resampler=False,
 
-    patience=20000,
+    patience=100000,
     curriculum=[
-        dict(patience_start=200000),
+        dict(patience_start=100000),
         dict(
             lr_schedule=1. / 3 * 1e-4, load_path=-1,
             initial_n_frames=8,
@@ -547,15 +547,6 @@ alg_configs["restart_conv_silot"] = alg_configs["conv_silot"].copy(
     # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-sub/exp_alg=conv-isspair_2019_06_11_11_54_18_seed=1998402147/weights/best_of_stage_0",
     # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-big/exp_alg=conv-isspair_2019_06_15_22_40_33_seed=437172375/weights/final_for_stage_0",
     load_path="/media/data/dps_data/local_experiments/env=moving-mnist/exp_alg=conv-isspair_2019_06_19_12_08_45_seed=902400173/weights/best_of_stage_0",
-    patience=20000,
-    curriculum=[
-        dict(
-            lr_schedule=1e-5
-        ),
-        dict(
-            lr_schedule=1e-6, load_path=-1,
-        ),
-    ]
 )
 
 alg_configs["load_conv_silot"] = alg_configs["conv_silot"].copy(
@@ -654,23 +645,34 @@ alg_configs["test_silot"] = alg_configs["silot"].copy(
 
 # --- SQAIR ---
 
+
+def sqair_prepare_func():
+    from dps import cfg
+    cfg.n_steps_per_image = cfg.n_objects
+
+
 alg_configs['sqair'] = Config(
     stopping_criteria="mota_post_prior_sum,max",
     threshold=np.inf,
+    prepare_func=sqair_prepare_func,
 
     get_updater=SQAIRUpdater,
     build_network=SQAIR,
     render_hook=SQAIR_RenderHook(),
     debug=False,
-    batch_size=32,
+    batch_size=16,
+    # batch_size=32,
     disc_prior_type='cat',
-    step_success_prob=0.75,
+    step_success_prob=0.75,  # Not used when disc_prior_type==cat
+
+    disc_step_bias=5.,
     prop_step_bias=5.,
     prop_prior_step_bias=10.,
     prop_prior_type='rnn',
+
     masked_glimpse=True,
-    k_particles=5,
-    n_steps_per_image=3,
+    k_particles=1,
+    n_steps_per_image=12,
     sample_from_prior=False,
     rec_where_prior=True,
     rnn_class=snt.VanillaRNN,
@@ -688,18 +690,16 @@ alg_configs['sqair'] = Config(
     output_scale=0.25,
     output_std=0.3,
     scale_prior=(-2., -2.),
-    max_steps=int(2e6),
     variable_scope_depth=None,
     training_wheels=0.0,
     fixed_presence=False,
-    disc_step_bias=5.,
 
     fast_discovery=False,
     fast_propagation=False,
 
-    patience=20000,
+    patience=100000,
     curriculum=[
-        dict(patience_start=200000),
+        dict(patience_start=100000),
         dict(
             lr_schedule=1. / 3 * 1e-5, load_path=-1,
             initial_n_frames=8,
@@ -715,13 +715,7 @@ alg_configs['sqair'] = Config(
 )
 
 
-def sqair_fixed_prepare_func():
-    from dps import cfg
-    cfg.n_steps_per_image = cfg.n_objects
-
-
 alg_configs['fixed_sqair'] = alg_configs['sqair'].copy(
-    prepare_func=sqair_fixed_prepare_func,
     fixed_presence=True,
     disc_prior_type='fixed',
 )
