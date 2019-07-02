@@ -671,7 +671,7 @@ alg_configs['sqair'] = Config(
     prop_prior_type='rnn',
 
     masked_glimpse=True,
-    k_particles=1,
+    k_particles=2,
     n_steps_per_image=12,
     sample_from_prior=False,
     rec_where_prior=True,
@@ -752,9 +752,8 @@ alg_configs['conv_fixed_sqair'] = alg_configs['fixed_sqair'].copy(
 # --- TBA ---
 
 alg_configs['tba_shapes'] = Config(
-    # TODO: maybe change this
-    stopping_criteria='loss,min',
-    threshold=-np.inf,
+    stopping_criteria="mota_post_prior_sum,max",
+    threshold=np.inf,
 
     build_network=TrackingByAnimation,
 

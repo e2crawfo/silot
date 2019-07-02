@@ -114,6 +114,9 @@ class SQAIRUpdater(_Updater):
                                         cfg.batch_size)
         self.data_manager.build_graph()
 
+        if self.k_particles <= 1:
+            raise Exception("`k_particles` must be > 1.")
+
         data = self.data_manager.iterator.get_next()
         data['mean_img'] = self.compute_validation_pixelwise_mean(data)
         self.batch_size = cfg.batch_size
@@ -274,14 +277,8 @@ class SQAIR_AP(AP):
         predicted_n_digits = tensors['resampled_num_steps_per_sample']
         w, h, x, y = np.split(tensors['resampled_where_coords'], 4, axis=3)
 
-        transformed_x = 0.5 * (x + 1.) * updater.network.image_width
-        transformed_y = 0.5 * (y + 1.) * updater.network.image_height
-
-        height = h * updater.network.image_height
-        width = w * updater.network.image_width
-
-        top = transformed_y - height / 2
-        left = transformed_x - width / 2
+        image_shape = (updater.image_height, updater.image_width)
+        top, left, height, width = coords_to_pixel_space(y, x, h, w, image_shape, top_left=True)
 
         annotations = tensors["annotations"]
         n_annotations = tensors["n_annotations"]
@@ -308,14 +305,8 @@ class SQAIR_MOTMetrics(MOTMetrics):
         x = x.reshape(shape)
         y = y.reshape(shape)
 
-        transformed_x = 0.5 * (x + 1.) * updater.network.image_width
-        transformed_y = 0.5 * (y + 1.) * updater.network.image_height
-
-        height = h * updater.network.image_height
-        width = w * updater.network.image_width
-
-        top = transformed_y - height / 2
-        left = transformed_x - width / 2
+        image_shape = (updater.image_height, updater.image_width)
+        top, left, height, width = coords_to_pixel_space(y, x, h, w, image_shape, top_left=True)
 
         return obj, pred_n_objects, obj_id, top, left, height, width
 
@@ -494,9 +485,22 @@ class SQAIR(VideoNetwork):
         self._tensors.update(outputs)
 
 
+def coords_to_pixel_space(y, x, h, w, image_shape, top_left):
+    h = h * (image_shape[0] + 1)
+    w = w * (image_shape[1] + 1)
+    y = 0.5 * image_shape[0] * (y + 1.) - 0.5
+    x = 0.5 * image_shape[1] * (x + 1.) - 0.5
+
+    if top_left:
+        y = y - h / 2
+        x = x - w / 2
+
+    return y, x, h, w
+
+
 class SQAIR_RenderHook(RenderHook):
     N = 16
-    linewidth = 2
+    linewidth = 0.5
     on_color = np.array(to_rgb("xkcd:azure"))
     off_color = np.array(to_rgb("xkcd:red"))
     gt_color = "xkcd:yellow"
@@ -661,16 +665,7 @@ class SQAIR_RenderHook(RenderHook):
 
         w, h, x, y = np.split(fetched['resampled_where_coords'], 4, axis=3)
 
-        network = updater.network
-
-        transformed_x = 0.5 * (x + 1.) * network.image_width
-        transformed_y = 0.5 * (y + 1.) * network.image_height
-
-        height = h * network.image_height
-        width = w * network.image_width
-
-        top = transformed_y - height / 2
-        left = transformed_x - width / 2
+        top, left, height, width = coords_to_pixel_space(y, x, h, w, (image_height, image_width), top_left=True)
 
         n_annotations = fetched.get("n_annotations", np.zeros(N, dtype='i'))
         annotations = fetched.get("annotations", None)
