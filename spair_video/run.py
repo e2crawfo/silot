@@ -732,7 +732,7 @@ class SQAIRWrapper:
         return tf.reshape(output, (batch_size, n_trailing))
 
 
-alg_configs['conv_fixed_sqair'] = alg_configs['fixed_sqair'].copy(
+alg_configs['conv_sqair'] = alg_configs['sqair'].copy(
     build_input_encoder=lambda: SQAIRWrapper(
         GridConvNet(
             layers=[
@@ -746,7 +746,6 @@ alg_configs['conv_fixed_sqair'] = alg_configs['fixed_sqair'].copy(
             scope='input_encoder',
         )
     ),
-    k_particles=3,
 )
 
 # --- TBA ---
