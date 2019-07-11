@@ -261,6 +261,27 @@ env_configs["small_shapes"] = env_configs["hard_shapes"].copy(
     background_cfg=dict(bg_shape=(30, 30)),
 )
 
+env_configs["big_shapes"] = env_configs["easy_shapes"].copy(
+    image_shape=(96, 96),
+    tile_shape=(48, 48),
+    min_shapes=10,
+    max_shapes=20,
+    n_objects=30,
+)
+
+env_configs["big_shapes_small"] = env_configs["big_shapes"].copy(
+    postprocessing="random",
+    n_samples_per_image=4,
+)
+
+env_configs['big_shapes_gen'] = env_configs['big_shapes'].copy(
+    n_train=4,
+    noisy=False,
+    initial_n_frames=8,
+    render_first=True,
+    n_val=1000,
+)
+
 # --- ALGS ---
 
 
@@ -500,10 +521,12 @@ alg_configs["silot"] = alg_configs["sspair"].copy(
     use_abs_posn=True,
     edge_resampler=False,
 
-    patience=100000,
+    patience=30000,
+    patience_start=160000,
     curriculum=[
-        dict(patience_start=100000),
+        dict(),
         dict(
+            patience_start=1,
             lr_schedule=1. / 3 * 1e-4, load_path=-1,
             initial_n_frames=8,
             initial_count_prior_log_odds=0.0125,
@@ -511,6 +534,7 @@ alg_configs["silot"] = alg_configs["sspair"].copy(
             noise_schedule=0.0,
         ),
         dict(
+            patience_start=1,
             lr_schedule=1. / 9 * 1e-4, load_path=-1,
             initial_n_frames=8,
             initial_count_prior_log_odds=0.0125,
@@ -697,14 +721,17 @@ alg_configs['sqair'] = Config(
     fast_discovery=False,
     fast_propagation=False,
 
-    patience=100000,
+    patience=30000,
+    patience_start=160000,
     curriculum=[
-        dict(patience_start=100000),
+        dict(),
         dict(
+            patience_start=1,
             lr_schedule=1. / 3 * 1e-5, load_path=-1,
             initial_n_frames=8,
         ),
         dict(
+            patience_start=1,
             lr_schedule=1. / 9 * 1e-5, load_path=-1,
             initial_n_frames=8,
         ),

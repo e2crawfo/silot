@@ -1,10 +1,6 @@
-python silot_run.py short --n-digits=2
-python silot_run.py short --n-digits=4
-python silot_run.py short --n-digits=6
-python silot_run.py short --n-digits=8
-python silot_run.py short --n-digits=10
-python silot_run.py long --n-digits=2
-python silot_run.py long --n-digits=4
-python silot_run.py long --n-digits=6
-python silot_run.py long --n-digits=8
-python silot_run.py long --n-digits=10
+python silot_run.py long --max-digits=6
+python silot_run.py long --max-digits=12
+python sqair_run.py long --max-digits=6
+python sqair_run.py long --max-digits=12
+python sqair_run.py long --max-digits=6 --conv
+python sqair_run.py long --max-digits=12 --conv
