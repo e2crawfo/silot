@@ -210,9 +210,11 @@ class VideoNetwork(TensorRecorder):
         self._tensors.dynamic_n_frames = self.dynamic_n_frames
 
         self._tensors.inp = self._tensors.inp[:, :self.dynamic_n_frames]
-        self._tensors.annotations = self._tensors.annotations[:, :self.dynamic_n_frames]
-        # self._tensors.n_annotations = self._tensors.n_annotations[:, :self.dynamic_n_frames]
-        self._tensors.n_valid_annotations = self._tensors.n_valid_annotations[:, :self.dynamic_n_frames]
+
+        if 'annotations' in self._tensors:
+            self._tensors.annotations = self._tensors.annotations[:, :self.dynamic_n_frames]
+            # self._tensors.n_annotations = self._tensors.n_annotations[:, :self.dynamic_n_frames]
+            self._tensors.n_valid_annotations = self._tensors.n_valid_annotations[:, :self.dynamic_n_frames]
 
         self.record_tensors(
             batch_size=tf.to_float(self.batch_size),

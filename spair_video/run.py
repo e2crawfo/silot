@@ -7,6 +7,7 @@ from dps.hyper import run_experiment
 from dps.utils import Config
 from dps.datasets.base import VisualArithmeticDataset, Environment
 from dps.datasets.shapes import RandomShapesDataset
+from dps.datasets.atari import AtariVideoDataset
 from dps.utils.tf import MLP, CompositeCell, GridConvNet, RecurrentGridConvNet, ConvNet, tf_shape, LookupSchedule
 from dps.config import DEFAULT_CONFIG
 
@@ -52,6 +53,22 @@ class MovingShapes(Environment):
 
         test = RandomShapesDataset(
             n_examples=int(cfg.n_val), shuffle=True, seed=test_seed)
+
+        self.datasets = dict(train=train, val=val, test=test)
+
+
+class AtariEnv(Environment):
+    def __init__(self):
+        train_seed, val_seed, test_seed = 0, 1, 2
+
+        train = AtariVideoDataset(
+            max_examples=int(cfg.n_train), shuffle=True, seed=train_seed, episode_range=cfg.train_episode_range)
+
+        val = AtariVideoDataset(
+            max_examples=int(cfg.n_val), shuffle=True, seed=val_seed, episode_range=cfg.val_episode_range)
+
+        test = AtariVideoDataset(
+            max_examples=int(cfg.n_val), shuffle=True, seed=test_seed, episode_range=cfg.test_episode_range)
 
         self.datasets = dict(train=train, val=val, test=test)
 
@@ -280,6 +297,78 @@ env_configs['big_shapes_gen'] = env_configs['big_shapes'].copy(
     initial_n_frames=8,
     render_first=True,
     n_val=1000,
+)
+
+# --- SPACE INVADERS ---
+
+env_configs["space_invaders_train"] = Config(
+    build_env=AtariEnv,
+    atari_game="SpaceInvaders",
+    background_cfg=dict(mode="colour", colour="black"),
+
+    image_shape=None,
+    tile_shape=(48, 48),
+    postprocessing="random",
+    patch_shape=(14, 14),
+    object_shape=(14, 14),
+    train_episode_range=(None, 30),
+    val_episode_range=(30, 32),
+    test_episode_range=(32, 34),
+
+    n_frames=8,
+    after_warp=False,
+    max_episodes=None,
+    max_samples_per_ep=100,
+    n_samples_per_image=8,
+    frame_skip=2,
+)
+
+# --- ASTEROIDS ---
+
+env_configs["asteroids_train"] = Config(
+    build_env=AtariEnv,
+    atari_game="Asteroids",
+    background_cfg=dict(mode="colour", colour="black"),
+
+    image_shape=None,
+    tile_shape=(48, 48),
+    postprocessing="",
+    patch_shape=(14, 14),
+    object_shape=(14, 14),
+    train_episode_range=(None, 30),
+    val_episode_range=(30, 32),
+    test_episode_range=(32, 34),
+
+    n_frames=8,
+    after_warp=False,
+    max_episodes=None,
+    max_samples_per_ep=100,
+    n_samples_per_image=8,
+    frame_skip=1,
+)
+
+# --- CENTIPEDE ---
+
+env_configs["centipede_train"] = Config(
+    build_env=AtariEnv,
+    atari_game="Centipede",
+    background_cfg=dict(mode="colour", colour="black"),
+
+    image_shape=None,
+    tile_shape=(48, 48),
+    postprocessing="random",
+    patch_shape=(14, 14),
+    object_shape=(14, 14),
+    train_episode_range=(None, 30),
+    val_episode_range=(30, 32),
+    test_episode_range=(32, 34),
+
+    n_frames=8,
+    after_warp=False,
+    max_episodes=None,
+    max_samples_per_ep=100,
+    n_samples_per_image=8,
+    frame_skip=1,
 )
 
 # --- ALGS ---
