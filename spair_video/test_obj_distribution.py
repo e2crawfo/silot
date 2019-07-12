@@ -6,6 +6,7 @@ from dps import cfg
 
 config = Config(
     prior_log_odds=-0.25,
+    n_objects=32,
 )
 
 
@@ -15,15 +16,9 @@ with config:
     failure_prob = 1. / (1. + np.exp(-cfg.prior_log_odds))
     print(failure_prob)
 
-    H = 4
-    W = 4
-    P = 16
+    support = np.arange(cfg.n_objects + 1)
 
-    support = np.arange(H*W + P + 1)
-
-    raw_probs = (1-failure_prob) * failure_prob ** support
-    print(raw_probs)
-
+    raw_probs = (1 - failure_prob) * failure_prob ** support
     probs = raw_probs / raw_probs.sum()
     print(probs)
 

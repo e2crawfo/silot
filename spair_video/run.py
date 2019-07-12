@@ -762,6 +762,7 @@ alg_configs["test_silot"] = alg_configs["silot"].copy(
 def sqair_prepare_func():
     from dps import cfg
     cfg.n_steps_per_image = cfg.n_objects
+    cfg.patience_start = 4 * cfg.stage_steps
 
 
 alg_configs['sqair'] = Config(
@@ -773,9 +774,10 @@ alg_configs['sqair'] = Config(
     build_network=SQAIR,
     render_hook=SQAIR_RenderHook(),
     debug=False,
-    batch_size=16,
     # batch_size=32,
-    disc_prior_type='cat',
+    batch_size=16,
+    disc_prior_type='geom',
+    # disc_prior_type='cat',
     step_success_prob=0.75,  # Not used when disc_prior_type==cat
 
     disc_step_bias=5.,
@@ -811,7 +813,7 @@ alg_configs['sqair'] = Config(
     fast_propagation=False,
 
     patience=30000,
-    patience_start=160000,
+    stage_steps=20000,
     curriculum=[
         dict(),
         dict(
