@@ -774,7 +774,6 @@ alg_configs['sqair'] = Config(
     build_network=SQAIR,
     render_hook=SQAIR_RenderHook(),
     debug=False,
-    # batch_size=32,
     batch_size=16,
     disc_prior_type='geom',
     # disc_prior_type='cat',
