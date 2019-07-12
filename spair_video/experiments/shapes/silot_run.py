@@ -1,43 +1,48 @@
 from dps.hyper import run_experiment
+from dps.utils import copy_update
+from dps.updater import DummyUpdater
 from spair_video.run import basic_config, alg_configs, env_configs
 
-late_config = dict(max_steps=250000)
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument('--max-shapes', type=int, choices=[10, 20, 30], required=True)
+parser.add_argument('--small', action='store_true')
+args, _ = parser.parse_known_args()
 
-distributions = None
 
-readme = "Running SILOT experiment on hard_shapes."
+readme = "Running SILOT experiment on shapes."
 
-pmem = 15000
-project = "rpp-bengioy"
-n_gpus = 2
-gpu_set = ",".join(str(i) for i in range(n_gpus))
+run_kwargs = dict(
+    max_hosts=1, ppn=6, cpp=2, gpu_set="0,1", pmem=10000, project="rpp-bengioy",
+    wall_time="96hours", cleanup_time="5mins", slack_time="5mins", n_repeats=6,
+    copy_locally=True, config=dict(render_step=1000000)
+)
 
 durations = dict(
-    long=dict(
-        max_hosts=1, ppn=6, cpp=1, gpu_set=gpu_set, pmem=pmem, project=project,
-        wall_time="72hours", cleanup_time="5mins", slack_time="5mins", n_repeats=6,
-        copy_locally=True,
-    ),
+    long=copy_update(run_kwargs),
+    single=copy_update(run_kwargs, gpu_set="0", ppn=1, n_repeats=1),
     short=dict(
-        max_hosts=1, ppn=6, cpp=1, gpu_set=gpu_set, pmem=pmem, project=project,
-        wall_time="180mins", cleanup_time="2mins", slack_time="2mins", n_repeats=6,
-        config=dict(max_steps=3000, render_step=500, eval_step=500, display_step=100, stage_steps=600),
-        copy_locally=True,
+        wall_time="180mins", gpu_set="0", ppn=3, n_repeats=3, distributions=None,
+        config=dict(max_steps=3000, render_step=500, eval_step=100, display_step=100, stage_steps=600, curriculum=[dict()]),
     ),
     build=dict(
-        max_hosts=1, ppn=1, cpp=1, gpu_set=gpu_set, pmem=pmem, project=project,
-        wall_time="120mins", cleanup_time="2mins", slack_time="2mins", n_repeats=1,
-        config=dict(do_train=False, render_first=False, render_final=False),
+        ppn=1, cpp=1, gpu_set="0", wall_time="180mins", n_repeats=1, distributions=None,
+        config=dict(
+            do_train=False, get_updater=DummyUpdater, render_hook=None,
+            curriculum=[dict()],
+        )
     ),
 )
 
 config = basic_config.copy()
-config.update(env_configs['hard_shapes'])
-config.update(alg_configs['silot'])
-config.update(late_config)
+if args.small:
+    config.update(env_configs['big_shapes'])
+else:
+    config.update(env_configs['big_shapes_small'])
+
+config.update(alg_configs['conv_silot'], min_shapes=args.max_shapes-9, max_shapes=args.max_shapes)
+config.update(final_count_prior_log_odds=0.0125, stage_steps=40000)
 
 run_experiment(
-    "hard_shapes_silot",
-    config, "SILOT on hard_shapes.",
-    distributions=distributions, durations=durations
+    "shapes_silot", config, "silot on shapes.", name_variables="max_shapes", durations=durations
 )
