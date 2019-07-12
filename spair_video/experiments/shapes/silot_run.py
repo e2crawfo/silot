@@ -26,7 +26,7 @@ durations = dict(
         config=dict(max_steps=3000, render_step=500, eval_step=100, display_step=100, stage_steps=600, curriculum=[dict()]),
     ),
     build=dict(
-        ppn=1, cpp=1, gpu_set="0", wall_time="180mins", n_repeats=1, distributions=None,
+        ppn=1, cpp=3, gpu_set="0", wall_time="300mins", n_repeats=1, distributions=None,
         config=dict(
             do_train=False, get_updater=DummyUpdater, render_hook=None,
             curriculum=[dict()],
@@ -36,9 +36,9 @@ durations = dict(
 
 config = basic_config.copy()
 if args.small:
-    config.update(env_configs['big_shapes'])
-else:
     config.update(env_configs['big_shapes_small'])
+else:
+    config.update(env_configs['big_shapes'])
 
 config.update(alg_configs['conv_silot'], min_shapes=args.max_shapes-9, max_shapes=args.max_shapes)
 config.update(final_count_prior_log_odds=0.0125, stage_steps=40000)
