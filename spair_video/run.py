@@ -80,7 +80,7 @@ basic_config = DEFAULT_CONFIG.copy(
     threshold=-np.inf,
     max_experiments=None,
     preserve_env=False,
-    load_path=None,
+    load_path=-1,
     start_tensorboard=10,
     render_final=False,
     render_first=False,
@@ -617,7 +617,7 @@ alg_configs["silot"] = alg_configs["sspair"].copy(
         dict(),
         dict(
             patience_start=1,
-            lr_schedule=1. / 3 * 1e-4, load_path=-1,
+            lr_schedule=1. / 3 * 1e-4,
             initial_n_frames=8,
             initial_count_prior_log_odds=0.0125,
             end_training_wheels=1,
@@ -625,7 +625,7 @@ alg_configs["silot"] = alg_configs["sspair"].copy(
         ),
         dict(
             patience_start=1,
-            lr_schedule=1. / 9 * 1e-4, load_path=-1,
+            lr_schedule=1. / 9 * 1e-4,
             initial_n_frames=8,
             initial_count_prior_log_odds=0.0125,
             end_training_wheels=1,
@@ -822,12 +822,12 @@ alg_configs['sqair'] = Config(
         dict(),
         dict(
             patience_start=1,
-            lr_schedule=1. / 3 * 1e-5, load_path=-1,
+            lr_schedule=1. / 3 * 1e-5,
             initial_n_frames=8,
         ),
         dict(
             patience_start=1,
-            lr_schedule=1. / 9 * 1e-5, load_path=-1,
+            lr_schedule=1. / 9 * 1e-5,
             initial_n_frames=8,
         ),
     ],
