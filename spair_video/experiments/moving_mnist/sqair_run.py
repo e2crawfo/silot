@@ -13,7 +13,7 @@ readme = "Running SQAIR experiment on moving_mnist."
 run_kwargs = dict(
     max_hosts=1, ppn=6, cpp=2, gpu_set="0,1", pmem=6000, project="rpp-bengioy",
     wall_time="96hours", cleanup_time="5mins", slack_time="5mins", n_repeats=6,
-    copy_locally=True, config=dict(render_step=1000000)
+    copy_locally=True
 )
 
 durations = dict(
@@ -33,7 +33,7 @@ config.update(env_configs['moving_mnist'])
 
 alg_name = 'conv_sqair' if args.conv else 'sqair'
 config.update(
-    alg_configs[alg_name], max_digits=args.max_digits, n_objects=12,
+    alg_configs[alg_name], max_digits=args.max_digits, n_objects=args.max_digits,
 )
 
 search_params = {
@@ -43,7 +43,7 @@ search_params = {
     (False, 6): dict(disc_step_bias=6, stage_steps=20000),
 }[(args.conv, args.max_digits)]
 
-config.update(**search_params)
+config.update(**search_params, render_step=1000000)
 
 run_experiment(
     "moving_mnist_sqair",

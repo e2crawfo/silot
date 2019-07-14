@@ -122,6 +122,7 @@ basic_config = DEFAULT_CONFIG.copy(
     no_gradient="",
 
     annotation_scheme="correct",
+    warning_mode="ignore",
 )
 
 
@@ -789,6 +790,12 @@ alg_configs['sqair'] = Config(
     n_steps_per_image=12,
     sample_from_prior=False,
     rec_where_prior=True,
+    scale_prior=(-2., -2.),
+    scale_bounds=(0.0, 1.0),
+    transform_var_bias=-3.,
+    # scale_prior=(0., 0.),
+    # scale_bounds=(0.125, 0.42),
+    # transform_var_bias=0.,
     rnn_class=snt.VanillaRNN,
     time_rnn_class=snt.GRU,
     prior_rnn_class=snt.GRU,
@@ -800,10 +807,8 @@ alg_configs['sqair'] = Config(
     n_layers=2,
     n_hidden=8*32,
     n_what=50,
-    transform_var_bias=-3.,
     output_scale=0.25,
     output_std=0.3,
-    scale_prior=(-2., -2.),
     variable_scope_depth=None,
     training_wheels=0.0,
     fixed_presence=False,

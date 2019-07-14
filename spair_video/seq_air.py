@@ -131,7 +131,6 @@ class SQAIRUpdater(_Updater):
         assert not network_losses
 
         self.tensors.update(network_tensors)
-        self.tensors['where_coords'] = SpatialTransformer.to_coords(self.tensors['where'])
 
         self.recorded_tensors = recorded_tensors = dict(global_step=tf.train.get_or_create_global_step())
         self.recorded_tensors.update(network_recorded_tensors)
@@ -356,6 +355,7 @@ class SQAIR(VideoNetwork):
     rec_where_prior = Param()
 
     k_particles = Param()
+    scale_bounds = Param()
 
     prior_start_step = Param()
     eval_prior_start_step = Param()
@@ -471,7 +471,8 @@ class SQAIR(VideoNetwork):
             decoder = AIRDecoder(img_size, self.object_shape, glimpse_decoder,
                                  batch_dims=2,
                                  mean_img=self._tensors.mean_img,
-                                 output_std=self.output_std,)
+                                 output_std=self.output_std,
+                                 scale_bounds=self.scale_bounds)
 
         with tf.variable_scope('sequence'):
             time_cell = self.time_rnn_class(self.n_hidden)
@@ -481,6 +482,7 @@ class SQAIR(VideoNetwork):
                 time_cell, decoder, prior_start_step=self._prior_start_step)
 
         outputs = sequence_apdr(processed_image)
+        outputs['where_coords'] = decoder._transformer.to_coords(outputs['where'])
 
         self._tensors.update(outputs)
 
