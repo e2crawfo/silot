@@ -31,6 +31,10 @@ durations = dict(
             max_steps=3000, render_step=500, eval_step=100,
             display_step=100, stage_steps=600, curriculum=[dict()]),
     ),
+    test_load=dict(
+        wall_time="180mins", gpu_set="0", ppn=4, n_repeats=4, distributions=None,
+        config=dict(max_steps=500, curriculum=[dict(), dict()]),
+    ),
     build=dict(
         ppn=1, gpu_set="0", wall_time="60mins", n_repeats=1, distributions=None,
         config=dict(do_train=False, render_first=False, render_final=False),

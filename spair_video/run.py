@@ -757,6 +757,21 @@ alg_configs["test_silot"] = alg_configs["silot"].copy(
 )
 
 
+def silot_mnist_eval_prepare_func():
+    from dps import cfg
+    spair_prepare_func()
+    if cfg.max_digits == 6:
+        experiment_path = "/scratch/e2crawfo/dps_data/parallel_experiments_run/aaai_2020_silot/mnist/run/run_env=moving-mnist_max-digits=6_alg=conv-silot_duration=long_2019_07_08_04_05_50_seed=0/experiments"
+    else:
+        experiment_path = "/scratch/e2crawfo/dps_data/parallel_experiments_run/aaai_2020_silot/mnist/run/run_env=moving-mnist_max-digits=12_alg=conv-silot_duration=long_2019_07_08_04_06_03_seed=0/experiments"
+
+    import os
+    dirs = os.listdir(experiment_path)
+    my_dir = sorted(dirs)[cfg.repeat]
+
+    cfg.load_path = os.path.join(experiment_path, my_dir, 'weights/best_of_stage_2')
+
+
 # --- SQAIR ---
 
 

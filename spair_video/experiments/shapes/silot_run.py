@@ -15,7 +15,7 @@ readme = "Running SILOT experiment on shapes."
 run_kwargs = dict(
     max_hosts=1, ppn=6, cpp=2, gpu_set="0,1", pmem=10000, project="rpp-bengioy",
     wall_time="96hours", cleanup_time="5mins", slack_time="5mins", n_repeats=6,
-    copy_locally=True, config=dict(render_step=1000000)
+    copy_locally=True,
 )
 
 durations = dict(
@@ -41,7 +41,7 @@ else:
     config.update(env_configs['big_shapes'])
 
 config.update(alg_configs['conv_silot'], min_shapes=args.max_shapes-9, max_shapes=args.max_shapes)
-config.update(final_count_prior_log_odds=0.0125, stage_steps=40000)
+config.update(final_count_prior_log_odds=0.0125, stage_steps=40000, render_step=1000000, n_prop_objects=30)
 
 run_experiment(
     "shapes_silot", config, "silot on shapes.", name_variables="max_shapes", durations=durations
