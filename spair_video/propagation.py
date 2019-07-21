@@ -79,11 +79,13 @@ class ObjectPropagationLayer(ObjectLayer):
         super().__init__(**kwargs)
 
     def null_object_set(self, batch_size):
+        n_prop_objects = self.n_prop_objects
+
         new_objects = AttrDict(
-            normalized_box=tf.zeros((batch_size, self.n_prop_objects, 4)),
-            attr=tf.zeros((batch_size, self.n_prop_objects, self.A)),
-            z=tf.zeros((batch_size, self.n_prop_objects, 1)),
-            obj=tf.zeros((batch_size, self.n_prop_objects, 1)),
+            normalized_box=tf.zeros((batch_size, n_prop_objects, 4)),
+            attr=tf.zeros((batch_size, n_prop_objects, self.A)),
+            z=tf.zeros((batch_size, n_prop_objects, 1)),
+            obj=tf.zeros((batch_size, n_prop_objects, 1)),
         )
 
         yt, xt, ys, xs = tf.split(new_objects.normalized_box, 4, axis=-1)
@@ -109,9 +111,9 @@ class ObjectPropagationLayer(ObjectLayer):
             z_logit=new_objects.z + 0.0,
         )
 
-        prop_state = self.cell.initial_state(batch_size*self.n_prop_objects, tf.float32)
+        prop_state = self.cell.initial_state(batch_size*n_prop_objects, tf.float32)
         trailing_shape = tf_shape(prop_state)[1:]
-        new_objects.prop_state = tf.reshape(prop_state, (batch_size, self.n_prop_objects, *trailing_shape))
+        new_objects.prop_state = tf.reshape(prop_state, (batch_size, n_prop_objects, *trailing_shape))
         new_objects.prior_prop_state = new_objects.prop_state
 
         return new_objects
@@ -493,17 +495,17 @@ class ObjectPropagationLayer(ObjectLayer):
         d_obj_logit = self.training_wheels * tf.stop_gradient(d_obj_logit) + (1-self.training_wheels) * d_obj_logit
         d_obj_log_odds = tf.clip_by_value(d_obj_logit / self.obj_temp, -10., 10.)
 
-        if self.noisy:
-            d_obj_pre_sigmoid = concrete_binary_pre_sigmoid_sample(d_obj_log_odds, self.obj_concrete_temp)
-        else:
-            d_obj_pre_sigmoid = d_obj_log_odds
+        d_obj_pre_sigmoid = (
+            self._noisy * concrete_binary_pre_sigmoid_sample(d_obj_log_odds, self.obj_concrete_temp)
+            + (1 - self._noisy) * d_obj_log_odds
+        )
 
         d_obj = tf.nn.sigmoid(d_obj_pre_sigmoid)
 
         new_obj = objects.obj * d_obj
         new_render_obj = (
             self.float_is_training * new_obj
-            + (1 - self.float_is_training) * tf.round(new_obj)
+            + (1 - self.float_is_training) * tf.round(new_obj + 0.5 - self.render_threshold)
         )
 
         new_objects.update(
@@ -809,17 +811,17 @@ class SQAIRPropagationLayer(ObjectPropagationLayer):
         d_obj_logit = self.training_wheels * tf.stop_gradient(d_obj_logit) + (1-self.training_wheels) * d_obj_logit
         d_obj_log_odds = tf.clip_by_value(d_obj_logit / self.obj_temp, -10., 10.)
 
-        if self.noisy:
-            d_obj_pre_sigmoid = concrete_binary_pre_sigmoid_sample(d_obj_log_odds, self.obj_concrete_temp)
-        else:
-            d_obj_pre_sigmoid = d_obj_log_odds
+        d_obj_pre_sigmoid = (
+            self._noisy * concrete_binary_pre_sigmoid_sample(d_obj_log_odds, self.obj_concrete_temp)
+            + (1 - self._noisy) * d_obj_log_odds
+        )
 
         d_obj = tf.nn.sigmoid(d_obj_pre_sigmoid)
 
         new_obj = objects.obj * d_obj
         new_render_obj = (
             self.float_is_training * new_obj
-            + (1 - self.float_is_training) * tf.round(new_obj)
+            + (1 - self.float_is_training) * tf.round(new_obj + 0.5 - self.render_threshold)
         )
 
         new_objects.update(

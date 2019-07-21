@@ -7,6 +7,7 @@ import pprint
 import shutil
 import os
 import sonnet as snt
+import itertools
 
 import matplotlib.pyplot as plt
 from matplotlib import animation
@@ -23,7 +24,7 @@ from auto_yolo.models.core import AP, xent_loss, coords_to_pixel_space
 from auto_yolo.models.object_layer import GridObjectLayer, ConvGridObjectLayer, ObjectRenderer
 from auto_yolo.models.networks import SpatialAttentionLayerV2, DummySpatialAttentionLayer
 
-from spair_video.core import VideoNetwork, MOTMetrics
+from spair_video.core import VideoNetwork, MOTMetrics, get_object_ids
 from spair_video.propagation import ObjectPropagationLayer, SQAIRPropagationLayer
 
 
@@ -179,12 +180,15 @@ class SILOT(VideoNetwork):
                 eval_funcs = {"AP_at_point_{}".format(int(10 * v)): AP(v) for v in ap_iou_values}
                 eval_funcs["AP"] = AP(ap_iou_values)
                 eval_funcs["AP_train"] = AP(ap_iou_values, is_training=True)
-                eval_funcs["MOT"] = MOTMetrics()
-                eval_funcs["MOT_train"] = MOTMetrics(is_training=True)
+
+                if cfg.mot_metrics:
+                    eval_funcs["MOT"] = MOTMetrics()
+                    eval_funcs["MOT_train"] = MOTMetrics(is_training=True)
 
                 if self.learn_prior:
                     eval_funcs["prior_AP"] = Prior_AP(ap_iou_values, start_frame=self.eval_prior_start_step)
-                    eval_funcs["prior_MOT"] = Prior_MOTMetrics(start_frame=self.eval_prior_start_step)
+                    if cfg.mot_metrics:
+                        eval_funcs["prior_MOT"] = Prior_MOTMetrics(start_frame=self.eval_prior_start_step)
 
                 self._eval_funcs = eval_funcs
             else:
@@ -335,6 +339,8 @@ class SILOT(VideoNetwork):
             self.object_renderer(prop_objects, None, self.is_training, appearance_only=True))
         disc_objects.update(
             self.object_renderer(disc_objects, None, self.is_training, appearance_only=True))
+        selected_objects.update(
+            self.object_renderer(selected_objects, None, self.is_training, appearance_only=True))
 
         # --- kl ---
 
@@ -649,7 +655,7 @@ class SILOT_RenderHook(RenderHook):
         self._prepare_fetched(updater, fetched)
         self._plot(updater, fetched, post=True)
 
-        if updater.network.learn_prior:
+        if updater.network.learn_prior and cfg.plot_prior:
             feed_dict = self.get_feed_dict(updater)
 
             feed_dict[updater.network._prior_start_step] = updater.network.eval_prior_start_step
@@ -1088,3 +1094,206 @@ class SILOT_RenderHook(RenderHook):
                 os.path.join(
                     os.path.dirname(path),
                     'latest_stage{:0>4}.mp4'.format(updater.stage_idx)))
+
+
+class SimpleSILOT_RenderHook(SILOT_RenderHook):
+    N = 16
+
+    def build_fetches(self, updater):
+        return "output inp background offset"
+
+    def __call__(self, updater):
+        fetched = self._fetch(updater)
+        fetched = Config(fetched)
+        self._prepare_fetched(updater, fetched)
+        self._plot(updater, fetched, post=True)
+
+        if updater.network.learn_prior and cfg.plot_prior:
+            feed_dict = self.get_feed_dict(updater)
+
+            feed_dict[updater.network._prior_start_step] = updater.network.eval_prior_start_step
+
+            sess = tf.get_default_session()
+            fetched = sess.run(self.to_fetch, feed_dict=feed_dict)
+            fetched = Config(fetched)
+
+            self._plot(updater, fetched, post=False)
+
+    def _prepare_fetched(self, updater, fetched):
+        return fetched
+
+    def _plot(self, updater, fetched, post):
+        N, T, image_height, image_width, _ = fetched['inp'].shape
+
+        for idx in range(self.N):
+            fig, axes = plt.subplots(1, 2, figsize=(20, 10))
+
+            def func(t):
+                ax = axes[0]
+                if t == 0:
+                    ax.set_title('inp')
+                self.imshow(ax, fetched['inp'][idx, t])
+
+                ax = axes[1]
+                if t == 0:
+                    ax.set_title('output')
+                self.imshow(ax, fetched['output'][idx, t])
+
+            plt.subplots_adjust(left=0.02, right=.98, top=.95, bottom=0.02, wspace=0.1, hspace=0.12)
+
+            anim = animation.FuncAnimation(fig, func, frames=T, interval=500)
+
+            prefix = "post" if post else "prior"
+
+            path = self.path_for('{}/{}'.format(prefix, idx), updater, ext="mp4")
+            anim.save(path, writer='ffmpeg', codec='hevc', extra_args=['-preset', 'ultrafast'], dpi=self.dpi)
+
+            plt.close(fig)
+
+            shutil.copyfile(
+                path,
+                os.path.join(
+                    os.path.dirname(path),
+                    'latest_stage{:0>4}.mp4'.format(updater.stage_idx)))
+
+
+class PaperSILOT_RenderHook(SILOT_RenderHook):
+    """ A more compact rendering, suitable for inclusion in papers. """
+    N = 16
+
+    def build_fetches(self, updater):
+        select_names = "is_new obj render_obj z appearance normalized_box".split()
+        render_names = "output".split()
+
+        _fetches = Config(
+            post=Config(
+                select=Config(**{n: 0 for n in select_names}),
+                render=Config(**{n: 0 for n in render_names}),
+            ),
+        )
+
+        fetches = ' '.join(list(_fetches.keys()))
+        fetches += " inp"
+
+        network = updater.network
+        if "n_annotations" in network._tensors:
+            fetches += " annotations n_annotations"
+
+        return fetches
+
+    def _prepare_fetched(self, updater, fetched):
+        inp = fetched['inp']
+
+        N, T, image_height, image_width, _ = inp.shape
+
+        yt, xt, ys, xs = np.split(fetched.post.select.normalized_box, 4, axis=-1)
+        pixel_space_box = coords_to_pixel_space(
+            yt, xt, ys, xs, (image_height, image_width), updater.network.anchor_box, top_left=True)
+        fetched.post.select.pixel_space_box = np.concatenate(pixel_space_box, axis=-1)
+
+    def _plot(self, updater, fetched, post):
+        N, T, image_height, image_width, _ = fetched['inp'].shape
+        W = updater.network.W
+
+        obj = fetched.post.select.obj
+        is_new = fetched.post.select.is_new
+        threshold = updater.network.prop_layer.render_threshold
+        tracking_ids = get_object_ids(obj, is_new, threshold, on_only=False)
+
+        fig_unit_size = 0.5
+
+        fig_width = T * W
+        n_prop_objects = updater.network.prop_layer.n_prop_objects
+        n_prop_rows = int(np.ceil(n_prop_objects / W))
+        fig_height = 3 * n_prop_rows
+
+        colors = list(plt.get_cmap('Set3').colors)
+
+        for idx in range(N):
+
+            # --- set up figure and axes ---
+
+            fig = plt.figure(figsize=(fig_unit_size*fig_width, fig_unit_size*fig_height))
+
+            gs = gridspec.GridSpec(fig_height, fig_width, figure=fig)
+
+            ground_truth_axes = [fig.add_subplot(gs[0:n_prop_rows, t*W:(t+1)*W]) for t in range(T)]
+            gta = ground_truth_axes[0]
+            gta.text(-0.1, 0.5, 'input', transform=gta.transAxes, ha='center', va='center', rotation=90)
+
+            dummy_axis = fig.add_subplot(gs[n_prop_rows:2*n_prop_rows, :W])
+            dummy_axis.set_axis_off()
+            dummy_axis.text(-0.1, 0.5, 'objects', transform=dummy_axis.transAxes, ha='center', va='center', rotation=90)
+
+            grid_axes = np.array([
+                [fig.add_subplot(gs[n_prop_rows+i, t*W+j]) for i, j in itertools.product(range(n_prop_rows), range(W))]
+                for t in range(T)])
+
+            reconstruction_axes = [fig.add_subplot(gs[2*n_prop_rows:3*n_prop_rows, t*W:(t+1)*W]) for t in range(T)]
+            ra = reconstruction_axes[0]
+            ra.text(-0.1, 0.5, 'reconstruction', transform=ra.transAxes, ha='center', va='center', rotation=90)
+
+            all_axes = np.concatenate(
+                [ground_truth_axes,
+                 grid_axes.flatten(),
+                 reconstruction_axes], axis=0)
+
+            for ax in all_axes.flatten():
+                ax.set_axis_off()
+
+            # --- plot data ---
+
+            lw = self.linewidth
+
+            print("Plotting {} for {}...".format(idx, "posterior" if post else "prior"))
+
+            for t in range(T):
+                ax_inp = ground_truth_axes[t]
+                self.imshow(ax_inp, fetched.inp[idx, t])
+
+                ax_outp = reconstruction_axes[t]
+                self.imshow(ax_outp, fetched.post.render.output[idx, t])
+
+                old = []
+                new = []
+
+                for i in range(n_prop_objects):
+                    if obj[idx, t, i, 0] > threshold:
+                        if is_new[idx, t, i]:
+                            new.append(i)
+                        else:
+                            old.append(i)
+
+                flat_box = fetched.post.select.pixel_space_box[idx, t].reshape(-1, 4)
+
+                axis_idx = 0
+                for i in old + new:
+                    tracking_id = tracking_ids[idx, t][i]
+
+                    ax = grid_axes[t, axis_idx]
+                    app = fetched.post.select.appearance[idx, t, i, :, :, :3]
+                    alpha = fetched.post.select.appearance[idx, t, i, :, :, 3:]
+                    masked_apperance = app * alpha
+                    self.imshow(ax, masked_apperance)
+
+                    color = colors[tracking_id % len(colors)]
+                    rect = patches.Rectangle(
+                        (0.0, 0.0), 1.0, 1.0, clip_on=False, linewidth=3,
+                        transform=ax.transAxes, edgecolor=color, facecolor='none')
+                    ax.add_patch(rect)
+
+                    top, left, height, width = flat_box[i]
+
+                    rect = patches.Rectangle(
+                        (left, top), width, height, linewidth=lw, edgecolor=color, facecolor='none')
+                    ax_inp.add_patch(rect)
+
+                    rect = patches.Rectangle(
+                        (left, top), width, height, linewidth=lw, edgecolor=color, facecolor='none')
+                    ax_outp.add_patch(rect)
+
+                    axis_idx += 1
+
+            plt.subplots_adjust(left=0.02, right=.98, top=.98, bottom=0.02, wspace=0.1, hspace=0.1)
+            prefix = "post" if post else "prior"
+            self.savefig("{}/{}".format(prefix, idx), fig, updater)

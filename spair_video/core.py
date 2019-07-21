@@ -17,6 +17,31 @@ from dps.utils.tf import (
 from auto_yolo.models.core import normal_vae, TensorRecorder, xent_loss, coords_to_pixel_space
 
 
+def get_object_ids(obj, is_new, threshold=0.5, on_only=True):
+    shape = obj.shape[:3]
+    obj = obj.reshape(shape)
+    is_new = is_new.reshape(shape)
+    B, F, n_objects = shape
+    pred_ids = np.zeros((B, F), dtype=np.object)
+
+    for b in range(B):
+        next_id = 0
+        ids = [-1] * n_objects
+        for f in range(F):
+            _pred_ids = []
+            for i in range(n_objects):
+                if obj[b, f, i] > threshold:
+                    if is_new[b, f, i]:
+                        ids[i] = next_id
+                        next_id += 1
+                    _pred_ids.append(ids[i])
+                elif not on_only:
+                    _pred_ids.append(ids[i])
+
+            pred_ids[b, f] = _pred_ids
+    return pred_ids
+
+
 class MOTMetrics:
     keys_accessed = "is_new normalized_box obj annotations n_annotations"
 
@@ -63,6 +88,7 @@ class MOTMetrics:
                             next_id += 1
                         _pred_ids.append(ids[i])
                 pred_ids[b, f] = _pred_ids
+
         pred_n_objects = n_objects * np.ones((B, F), dtype=np.int32)
 
         return obj, pred_n_objects, pred_ids, top, left, height, width

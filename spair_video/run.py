@@ -17,7 +17,7 @@ from spair_video.core import SimpleVideoVAE, SimpleVAE_RenderHook, BackgroundExt
 from spair_video.tba import TrackingByAnimation, TBA_Backbone, TBA_RenderHook
 from spair_video.seq_air import SQAIR, SQAIRUpdater, SQAIR_RenderHook
 from spair_video.sspair import SequentialSpair, SequentialSpair_RenderHook
-from spair_video.silot import SILOT, SILOT_RenderHook
+from spair_video.silot import SILOT, SILOT_RenderHook, SimpleSILOT_RenderHook, PaperSILOT_RenderHook
 from spair_video.background_only import BackgroundOnly, BackgroundOnly_RenderHook
 from spair_video.baseline import BaselineTracker, Baseline_RenderHook
 
@@ -80,7 +80,7 @@ basic_config = DEFAULT_CONFIG.copy(
     threshold=-np.inf,
     max_experiments=None,
     preserve_env=False,
-    load_path=-1,
+    load_path="-1",
     start_tensorboard=10,
     render_final=False,
     render_first=False,
@@ -111,6 +111,7 @@ basic_config = DEFAULT_CONFIG.copy(
     n_frames_scale=2,
 
     noisy=True,
+    eval_noisy=True,
     train_reconstruction=True,
     train_kl=True,
     reconstruction_weight=1.0,
@@ -180,7 +181,6 @@ env_configs['moving_mnist_sub'] = env_configs['moving_mnist'].copy(
 env_configs['moving_mnist_gen'] = env_configs['moving_mnist_sub'].copy(
     postprocessing="",
     n_train=4,
-    noisy=False,
     initial_n_frames=8,
     render_first=True,
 )
@@ -294,82 +294,145 @@ env_configs["big_shapes_small"] = env_configs["big_shapes"].copy(
 
 env_configs['big_shapes_gen'] = env_configs['big_shapes'].copy(
     n_train=4,
-    noisy=False,
     initial_n_frames=8,
     render_first=True,
     n_val=1000,
 )
 
-# --- SPACE INVADERS ---
+# --- ATARI ---
 
-env_configs["space_invaders_train"] = Config(
+# For eval config, just set postprocessing=""
+atari_train_config = Config(
     build_env=AtariEnv,
-    atari_game="SpaceInvaders",
+
     background_cfg=dict(mode="colour", colour="black"),
 
     image_shape=None,
-    tile_shape=(48, 48),
+    anchor_box=(36, 36),
+    tile_shape=(72, 72),
     postprocessing="random",
     patch_shape=(14, 14),
     object_shape=(14, 14),
-    train_episode_range=(None, 30),
-    val_episode_range=(30, 32),
-    test_episode_range=(32, 34),
 
     n_frames=8,
     after_warp=False,
     max_episodes=None,
-    max_samples_per_ep=100,
+    max_samples_per_ep=1000,
     n_samples_per_image=8,
+    frame_skip=1,
+)
+
+# --- SPACE INVADERS ---
+
+env_configs["space_invaders_train"] = atari_train_config.copy(
+    atari_game="SpaceInvaders",
+
+    train_episode_range=(None, 30),
+    val_episode_range=(30, 32),
+    test_episode_range=(32, 34),
+
     frame_skip=2,
 )
 
 # --- ASTEROIDS ---
 
-env_configs["asteroids_train"] = Config(
-    build_env=AtariEnv,
+env_configs["asteroids_train"] = atari_train_config.copy(
     atari_game="Asteroids",
-    background_cfg=dict(mode="colour", colour="black"),
-
-    image_shape=None,
-    tile_shape=(48, 48),
-    postprocessing="",
-    patch_shape=(14, 14),
-    object_shape=(14, 14),
     train_episode_range=(None, 30),
     val_episode_range=(30, 32),
     test_episode_range=(32, 34),
 
-    n_frames=8,
-    after_warp=False,
-    max_episodes=None,
-    max_samples_per_ep=100,
-    n_samples_per_image=8,
-    frame_skip=1,
 )
 
 # --- CENTIPEDE ---
 
-env_configs["centipede_train"] = Config(
-    build_env=AtariEnv,
+env_configs["centipede_train"] = atari_train_config.copy(
     atari_game="Centipede",
-    background_cfg=dict(mode="colour", colour="black"),
-
-    image_shape=None,
-    tile_shape=(48, 48),
-    postprocessing="random",
-    patch_shape=(14, 14),
-    object_shape=(14, 14),
     train_episode_range=(None, 30),
     val_episode_range=(30, 32),
     test_episode_range=(32, 34),
+)
 
-    n_frames=8,
-    after_warp=False,
-    max_episodes=None,
-    max_samples_per_ep=100,
-    n_samples_per_image=8,
-    frame_skip=1,
+# --- WIZARD OF WOR ---
+
+env_configs["wizard_of_wor_train"] = atari_train_config.copy(
+    atari_game="WizardOfWor",
+    train_episode_range=(None, 20),
+    val_episode_range=(20, 22),
+    test_episode_range=(22, 24),
+)
+
+# --- CARNIVAL ---
+
+env_configs["carnival_train"] = atari_train_config.copy(
+    atari_game="Carnival",
+    train_episode_range=(None, 30),
+    val_episode_range=(30, 32),
+    test_episode_range=(32, 34),
+)
+
+# --- VENTURE ---
+
+env_configs["venture_train"] = atari_train_config.copy(
+    atari_game="Venture",
+    train_episode_range=(None, 30),
+    val_episode_range=(30, 32),
+    test_episode_range=(32, 34),
+)
+
+# --- ASSAULT ---
+
+env_configs["assault_train"] = atari_train_config.copy(
+    atari_game="Assault",
+    train_episode_range=(None, 30),
+    val_episode_range=(30, 32),
+    test_episode_range=(32, 34),
+)
+
+# --- PONG ---
+
+env_configs["pong_train"] = atari_train_config.copy(
+    atari_game="Pong",
+    train_episode_range=(None, 30),
+    val_episode_range=(30, 32),
+    test_episode_range=(32, 34),
+)
+
+# --- BERZERK ---
+
+env_configs["berzerk_train"] = atari_train_config.copy(
+    atari_game="Berzerk",
+    train_episode_range=(None, 30),
+    val_episode_range=(30, 32),
+    test_episode_range=(32, 34),
+)
+
+# --- DEMON ATTACK ---
+
+env_configs["demon_attack_train"] = atari_train_config.copy(
+    atari_game="DemonAttack",
+    train_episode_range=(None, 30),
+    val_episode_range=(30, 32),
+    test_episode_range=(32, 34),
+)
+
+# --- PHOENIX ---
+
+env_configs["phoenix_train"] = atari_train_config.copy(
+    atari_game="Phoenix",
+    train_episode_range=(None, 30),
+    val_episode_range=(30, 32),
+    test_episode_range=(32, 34),
+)
+
+# --- AIR RAID ---
+# (blue background)
+
+env_configs["air_raid_train"] = atari_train_config.copy(
+    atari_game="AirRaid",
+    train_episode_range=(None, 30),
+    val_episode_range=(30, 32),
+    test_episode_range=(32, 34),
 )
 
 # --- ALGS ---
@@ -377,7 +440,10 @@ env_configs["centipede_train"] = Config(
 
 def spair_prepare_func():
     from dps import cfg
-    cfg.anchor_box = cfg.tile_shape
+
+    if not hasattr(cfg, 'anchor_box'):
+        cfg.anchor_box = cfg.tile_shape
+
     cfg.count_prior_log_odds = (
         "Exp(start={}, end={}, decay_rate=0.1, decay_steps={}, log=True)".format(
             cfg.initial_count_prior_log_odds,
@@ -493,6 +559,8 @@ alg_configs['sspair'] = Config(
     alpha_logit_scale=0.1,
     alpha_logit_bias=5.0,
 
+    render_threshold=0.5,
+
     end_training_wheels=1000,
     count_prior_dist=None,
     noise_schedule="Exp(0.001, 0.0, 1000, 0.1)",
@@ -563,6 +631,8 @@ alg_configs["background_only"] = dict(
 
 alg_configs["silot"] = alg_configs["sspair"].copy(
     render_hook=SILOT_RenderHook(),
+    plot_prior=True,
+    mot_metrics=True,
 
     stopping_criteria="mota_post_prior_sum,max",
     threshold=np.inf,
@@ -649,6 +719,47 @@ alg_configs["conv_silot"] = alg_configs["exp_silot"].copy(
     ),
 )
 
+alg_configs["conv_silot_plot"] = alg_configs["conv_silot"].copy(
+    render_hook=PaperSILOT_RenderHook(N=16),
+    load_path="/media/data/Dropbox/experiment_data/active/aaai_2020/mnist/run/run/run_env=moving-mnist_max-digits=12_alg=conv-silot_duration=long_2019_07_08_04_06_03_seed=0/experiments/exp_idx=0_repeat=0_2019_07_08_06_30_44_seed=2083385566/weights/best_of_stage_2",
+    n_train=32,
+    do_train=False,
+    n_frames=16,
+    initial_n_frames=16,
+    eval_noisy=False,
+    render_threshold=0.05,
+    curriculum=[dict()],
+    render_first=True,
+)
+
+alg_configs["atari_train_silot"] = alg_configs["conv_silot"].copy(
+    stopping_criteria="loss_reconstruction,min",
+    threshold=-np.inf,
+    stage_steps=20000,
+    patience_start=100000,
+    patience=20000,
+    render_first=True,
+    plot_prior=False,
+    final_count_prior_log_odds=0.0125,
+    # final_count_prior_log_odds=1e6,
+    # hw_prior_mean=-5.0,
+    # hw_prior_mean=-0.5,
+    # n_prop_objects=None,
+    n_prop_objects=32,
+    eval_noisy=False,
+    render_threshold=0.05,
+)
+
+alg_configs["atari_eval_silot"] = alg_configs["conv_silot"].copy(
+    render_hook=SimpleSILOT_RenderHook(),
+    postprocessing="",
+    do_train=False,
+    eval_noisy=False,
+    curriculum=[dict()],
+    n_prop_objects=64,
+    render_threshold=0.05,
+)
+
 alg_configs["restart_conv_silot"] = alg_configs["conv_silot"].copy(
     initial_n_frames=8,
     initial_count_prior_log_odds=0.0125,
@@ -667,7 +778,6 @@ alg_configs["load_conv_silot"] = alg_configs["conv_silot"].copy(
     # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-sub/exp_alg=conv-isspair_2019_06_10_16_18_52_seed=1143638891/weights/best_of_stage_0",
     load_path="/media/data/dps_data/local_experiments/env=moving-mnist-sub/exp_alg=restart-conv-isspair_2019_06_12_12_09_40_seed=1267365617/weights/best_of_stage_0",
     n_train=100,
-    noisy=False,
     do_train=False,
     render_hook=SILOT_RenderHook(),
 )
@@ -689,7 +799,6 @@ alg_configs["load_small_silot"] = alg_configs["exp_silot"].copy(
     render_hook=SILOT_RenderHook(N=16),
     load_path="/media/data/dps_data/local_experiments/test-spair-video_env=small-moving-mnist/exp_alg=exp-isspair_2019_05_16_00_28_54_seed=30001/weights/best_of_stage_0",
     n_train=32,
-    noisy=False,
     do_train=False,
     n_frames=3,
     initial_n_frames=3,
@@ -705,7 +814,6 @@ alg_configs["load_silot"] = alg_configs["exp_silot"].copy(
     load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=exp-isspair_2019_05_09_09_34_52_seed=893541943/weights/best_of_stage_0",
     # load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=isspair_seed=9239644_2019_05_07_08_49_23/weights/best_of_stage_0",
     n_train=4,
-    noisy=False,
     do_train=False,
     n_frames=4,
     initial_n_frames=4,
@@ -719,7 +827,6 @@ alg_configs["load_big_silot"] = alg_configs["exp_silot"].copy(
     min_digits=40,
     max_digits=40,
     n_train=16,
-    noisy=False,
     do_train=False,
     n_frames=2,
     initial_n_frames=2,
@@ -991,4 +1098,4 @@ if __name__ == "__main__":
     run_experiment(
         "test_spair_video", config, "First test of spair_video.",
         alg_configs=alg_configs, env_configs=env_configs,
-        check_command_line=True)
+        cl_mode='strict')
