@@ -672,7 +672,7 @@ alg_configs["load_conv_silot"] = alg_configs["conv_silot"].copy(
     render_hook=SILOT_RenderHook(),
 )
 
-alg_configs["shape_silot"] = alg_configs["exp_silot"].copy(
+alg_configs["shape_silot"] = alg_configs["conv_silot"].copy(
     color_logit_scale=1.0,
     alpha_logit_scale=1.0,
     alpha_logit_bias=3.0,
