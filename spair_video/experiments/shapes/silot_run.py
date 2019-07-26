@@ -37,11 +37,15 @@ durations = dict(
 config = basic_config.copy()
 if args.small:
     config.update(env_configs['big_shapes_small'])
+    config.n_prop_objects = 8
 else:
     config.update(env_configs['big_shapes'])
+    config.n_prop_objects = 30
 
-config.update(alg_configs['shape_silot'], min_shapes=args.max_shapes-9, max_shapes=args.max_shapes)
-config.update(final_count_prior_log_odds=0.0125, stage_steps=40000, render_step=1000000, n_prop_objects=30)
+config.update(alg_configs['shapes_silot'])
+config.update(
+    min_shapes=args.max_shapes-9, max_shapes=args.max_shapes,
+    stage_steps=40000, render_step=1000000)
 
 run_experiment(
     "shapes_silot", config, "silot on shapes.", name_variables="max_shapes", durations=durations

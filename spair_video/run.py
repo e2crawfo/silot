@@ -239,16 +239,16 @@ env_configs["sqair_mnist"] = env_configs["moving_mnist"].copy(
 
 # --- SHAPES ---
 
-env_configs["easy_shapes"] = Config(
+env_configs["shapes"] = Config(
     build_env=MovingShapes,
 
     image_shape=(48, 48),
     tile_shape=(48, 48),
     patch_shape=(14, 14),
     object_shape=(14, 14),
-    min_shapes=2,
-    max_shapes=2,
-    n_objects=2,
+    min_shapes=1,
+    max_shapes=8,
+    n_objects=8,
 
     max_overlap=14**2/2,
     one_hot=True,
@@ -265,21 +265,7 @@ env_configs["easy_shapes"] = Config(
     patch_speed=5,
 )
 
-env_configs["hard_shapes"] = env_configs["easy_shapes"].copy(
-    min_shapes=7,
-    max_shapes=7,
-    n_objects=7,
-    max_overlap=50,
-)
-
-env_configs["small_shapes"] = env_configs["hard_shapes"].copy(
-    image_shape=(24, 24),
-    tile_shape=(24, 24),
-    patch_shape=(14, 14),
-    background_cfg=dict(bg_shape=(30, 30)),
-)
-
-env_configs["big_shapes"] = env_configs["easy_shapes"].copy(
+env_configs["big_shapes"] = env_configs["shapes"].copy(
     image_shape=(96, 96),
     tile_shape=(48, 48),
     min_shapes=10,
@@ -782,10 +768,27 @@ alg_configs["load_conv_silot"] = alg_configs["conv_silot"].copy(
     render_hook=SILOT_RenderHook(),
 )
 
-alg_configs["shape_silot"] = alg_configs["conv_silot"].copy(
+alg_configs["shapes_silot"] = alg_configs["conv_silot"].copy(
     color_logit_scale=1.0,
     alpha_logit_scale=1.0,
     alpha_logit_bias=3.0,
+    final_count_prior_log_odds=2.5,  # log_odds = 0.9
+    independent_prop=False,
+    kernel_std=0.1,
+    eval_noisy=False,
+)
+
+alg_configs["eval_shapes_silot"] = alg_configs["shapes_silot"].copy(
+    postprocessing="",
+    n_train=32,
+    do_train=False,
+    eval_noisy=False,
+    render_threshold=0.05,
+    curriculum=[dict()],
+    n_prop_objects=30,
+    render_first=True,
+    n_frames=8,
+    initial_n_frames=8,
 )
 
 alg_configs["restart_silot"] = alg_configs["exp_silot"].copy(

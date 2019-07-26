@@ -1268,6 +1268,11 @@ class PaperSILOT_RenderHook(SILOT_RenderHook):
 
                 axis_idx = 0
                 for i in old + new:
+                    if axis_idx < len(old):
+                        ls = '-'
+                    else:
+                        ls = '--'
+
                     tracking_id = tracking_ids[idx, t][i]
 
                     ax = grid_axes[t, axis_idx]
@@ -1278,18 +1283,18 @@ class PaperSILOT_RenderHook(SILOT_RenderHook):
 
                     color = colors[tracking_id % len(colors)]
                     rect = patches.Rectangle(
-                        (0.0, 0.0), 1.0, 1.0, clip_on=False, linewidth=3,
+                        (0.0, 0.0), 1.0, 1.0, clip_on=False, linewidth=3, ls=ls,
                         transform=ax.transAxes, edgecolor=color, facecolor='none')
                     ax.add_patch(rect)
 
                     top, left, height, width = flat_box[i]
 
                     rect = patches.Rectangle(
-                        (left, top), width, height, linewidth=lw, edgecolor=color, facecolor='none')
+                        (left, top), width, height, linewidth=lw, ls=ls, edgecolor=color, facecolor='none')
                     ax_inp.add_patch(rect)
 
                     rect = patches.Rectangle(
-                        (left, top), width, height, linewidth=lw, edgecolor=color, facecolor='none')
+                        (left, top), width, height, linewidth=lw, ls=ls, edgecolor=color, facecolor='none')
                     ax_outp.add_patch(rect)
 
                     axis_idx += 1
