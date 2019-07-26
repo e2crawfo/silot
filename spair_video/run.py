@@ -891,6 +891,28 @@ def sqair_prepare_func():
     cfg.patience_start = 4 * cfg.stage_steps
 
 
+def sqair_mnist_eval_prepare_func():
+    from dps import cfg
+    sqair_prepare_func()
+
+    if cfg.max_digits == 6:
+        if cfg.alg_name == 'conv_sqair':
+            experiment_path = "/scratch/e2crawfo/dps_data/parallel_experiments_run/aaai_2020_silot/mnist/run/run_env=moving-mnist_max-digits=6_alg=conv-sqair_duration=long_2019_07_17_11_35_58_seed=0/experiments"
+        else:
+            experiment_path = "/scratch/e2crawfo/dps_data/parallel_experiments_run/aaai_2020_silot/mnist/run/run_env=moving-mnist_max-digits=6_alg=sqair_duration=long_2019_07_17_11_35_26_seed=0/experiments"
+    else:
+        if cfg.alg_name == 'conv_sqair':
+            experiment_path = "/scratch/e2crawfo/dps_data/parallel_experiments_run/aaai_2020_silot/mnist/run/run_env=moving-mnist_max-digits=12_alg=conv-sqair_duration=long_2019_07_17_11_36_13_seed=0/experiments"
+        else:
+            experiment_path = "/scratch/e2crawfo/dps_data/parallel_experiments_run/aaai_2020_silot/mnist/run/run_env=moving-mnist_max-digits=12_alg=sqair_duration=long_2019_07_17_11_35_42_seed=0/experiments"
+
+    import os
+    dirs = os.listdir(experiment_path)
+    my_dir = sorted(dirs)[cfg.repeat]
+
+    cfg.load_path = os.path.join(experiment_path, my_dir, 'weights/best_of_stage_2')
+
+
 alg_configs['sqair'] = Config(
     stopping_criteria="mota_post_prior_sum,max",
     threshold=np.inf,
