@@ -511,7 +511,7 @@ class SILOT(VideoNetwork):
             self.record_tensors(post_prop_d_attr_i_gate=post_prop["i_gate"])
             self.record_tensors(post_prop_d_attr_t_gate=post_prop["t_gate"])
 
-        disc_to_record = "cell_y cell_x height width yt xt ys xs z attr obj pred_n_objects".split()
+        disc_to_record = "cell_y cell_x height width yt xt ys xs z attr obj".split()
 
         post_disc = self._tensors.post.disc
         self.record_tensors(**{"post_disc_{}".format(k): post_disc[k] for k in disc_to_record})
@@ -591,6 +591,8 @@ class SILOT(VideoNetwork):
                 count_1norm / tf.maximum(tf.cast(self._tensors["n_valid_annotations"], tf.float32), 1e-6))
 
             self.record_tensors(
+                pred_n_objects=self._tensors["pred_n_objects"],
+                pred_n_objects_hard=self._tensors["pred_n_objects_hard"],
                 count_1norm_relative=count_1norm_relative,
                 count_1norm=count_1norm,
                 count_error=count_1norm > 0.5,
