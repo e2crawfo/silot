@@ -163,7 +163,6 @@ env_configs['moving_mnist'] = Config(
     background_cfg=dict(mode="colour", colour="black"),
     postprocessing="",
     patch_speed=2,
-    # patch_speed=5,
     bounce_patches=True,
 
     appearance_prob=1.0,
@@ -192,22 +191,6 @@ env_configs['moving_mnist_big'] = env_configs['moving_mnist'].copy(
     n_objects=4*8,
     min_digits=4*8,
     max_digits=4*8,
-)
-
-env_configs['moving_mnist_small'] = env_configs['moving_mnist'].copy(
-    image_shape=(36, 36),
-    tile_shape=(36, 36),
-    n_objects=4,
-    min_digits=4,
-    max_digits=4,
-)
-
-env_configs['moving_mnist_extra_small'] = env_configs['moving_mnist'].copy(
-    image_shape=(28, 28),
-    tile_shape=(28, 28),
-    n_objects=1,
-    min_digits=1,
-    max_digits=1,
 )
 
 env_configs["mnist_learned_background"] = env_configs["moving_mnist"].copy(
@@ -556,8 +539,8 @@ alg_configs['sspair'] = Config(
     hw_prior_mean=float(np.log(0.1/0.9)),
     hw_prior_std=0.5,
     count_prior_decay_steps=1000,
-    initial_count_prior_log_odds=1e6,
-    final_count_prior_log_odds=0.0125,
+    initial_count_prior_log_odds=1e6,  # log_odds: 13.815, sigmoid: .999
+    final_count_prior_log_odds=0.0125,  # log_odds: -4.38, sigmoid: 0.012
 )
 
 alg_configs["indep_sspair"] = alg_configs["sspair"].copy(
@@ -708,7 +691,6 @@ alg_configs["conv_silot"] = alg_configs["exp_silot"].copy(
 
 alg_configs["conv_silot_plot"] = alg_configs["conv_silot"].copy(
     render_hook=PaperSILOT_RenderHook(N=16),
-    load_path="/media/data/Dropbox/experiment_data/active/aaai_2020/mnist/run/run/run_env=moving-mnist_max-digits=12_alg=conv-silot_duration=long_2019_07_08_04_06_03_seed=0/experiments/exp_idx=0_repeat=0_2019_07_08_06_30_44_seed=2083385566/weights/best_of_stage_2",
     n_train=32,
     do_train=False,
     n_frames=16,
@@ -719,65 +701,11 @@ alg_configs["conv_silot_plot"] = alg_configs["conv_silot"].copy(
     render_first=True,
 )
 
-alg_configs["atari_train_silot"] = alg_configs["conv_silot"].copy(
-    stopping_criteria="loss_reconstruction,min",
-    threshold=-np.inf,
-    stage_steps=20000,
-    patience_start=100000,
-    patience=20000,
-    render_first=True,
-    plot_prior=False,
-    final_count_prior_log_odds=0.0125,
-    # final_count_prior_log_odds=1e6,
-    # hw_prior_mean=-5.0,
-    # hw_prior_mean=-0.5,
-    # n_prop_objects=None,
-    n_prop_objects=32,
-    eval_noisy=False,
-    render_threshold=0.05,
-)
-
-alg_configs["atari_eval_silot"] = alg_configs["conv_silot"].copy(
-    render_hook=SimpleSILOT_RenderHook(),
-    postprocessing="",
-    do_train=False,
-    eval_noisy=False,
-    curriculum=[dict()],
-    n_prop_objects=128,
-    render_threshold=0.05,
-    n_frames=16,
-    batch_size=4,
-    train_episode_range=(None, 1),
-    plot_prior=False,
-)
-
-alg_configs["restart_conv_silot"] = alg_configs["conv_silot"].copy(
-    initial_n_frames=8,
-    initial_count_prior_log_odds=0.0125,
-    end_training_wheels=1,
-    noise_schedule=0.0,
-    # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-exp/exp_alg=conv-isspair_2019_06_05_20_24_30_seed=977185253/weights/best_of_stage_0"
-    # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-exp/exp_alg=restart-conv-isspair_2019_06_06_09_26_48_seed=1909126348/weights/best_of_stage_0"
-    # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-exp/exp_alg=conv-isspair_2019_06_07_17_49_46_seed=850357482/weights/best_of_stage_0",
-    # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-sub/exp_alg=conv-isspair_2019_06_10_16_18_52_seed=1143638891/weights/best_of_stage_0",
-    # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-sub/exp_alg=conv-isspair_2019_06_11_11_54_18_seed=1998402147/weights/best_of_stage_0",
-    # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-big/exp_alg=conv-isspair_2019_06_15_22_40_33_seed=437172375/weights/final_for_stage_0",
-    load_path="/media/data/dps_data/local_experiments/env=moving-mnist/exp_alg=conv-isspair_2019_06_19_12_08_45_seed=902400173/weights/best_of_stage_0",
-)
-
-alg_configs["load_conv_silot"] = alg_configs["conv_silot"].copy(
-    # load_path="/media/data/dps_data/local_experiments/env=moving-mnist-sub/exp_alg=conv-isspair_2019_06_10_16_18_52_seed=1143638891/weights/best_of_stage_0",
-    load_path="/media/data/dps_data/local_experiments/env=moving-mnist-sub/exp_alg=restart-conv-isspair_2019_06_12_12_09_40_seed=1267365617/weights/best_of_stage_0",
-    n_train=100,
-    do_train=False,
-    render_hook=SILOT_RenderHook(),
-)
-
 alg_configs["shapes_silot"] = alg_configs["conv_silot"].copy(
     color_logit_scale=1.0,
     alpha_logit_scale=1.0,
     alpha_logit_bias=3.0,
-    final_count_prior_log_odds=0.0125,  # log_odds = 0.9
+    final_count_prior_log_odds=0.0125,
     independent_prop=False,
     kernel_std=0.15,
     eval_noisy=False,
@@ -796,78 +724,32 @@ alg_configs["eval_shapes_silot"] = alg_configs["shapes_silot"].copy(
     initial_n_frames=8,
 )
 
-alg_configs["resume_shapes_silot"] = alg_configs["shapes_silot"].copy(
-    initial_n_frames=6,
-    initial_count_prior_log_odds=2.5,
-    end_training_wheels=1,
-    noise_schedule=0.0,
-    min_shapes=11,
-    max_shapes=20,
-    n_prop_objects=30,
-    curriculum=[
-        dict(),
-        dict(
-            patience_start=1,
-            lr_schedule=1. / 3 * 1e-4,
-            initial_n_frames=8,
-            initial_count_prior_log_odds=2.5,
-            end_training_wheels=1,
-            noise_schedule=0.0,
-        ),
-        dict(
-            patience_start=1,
-            lr_schedule=1. / 9 * 1e-4,
-            initial_n_frames=8,
-            initial_count_prior_log_odds=2.5,
-            end_training_wheels=1,
-            noise_schedule=0.0,
-        ),
-    ],
+alg_configs["atari_train_silot"] = alg_configs["conv_silot"].copy(
+    stopping_criteria="loss_reconstruction,min",
+    threshold=-np.inf,
+    stage_steps=20000,
+    patience_start=100000,
+    patience=20000,
+    render_first=True,
+    plot_prior=False,
+    final_count_prior_log_odds=0.0125,
+    n_prop_objects=32,
+    eval_noisy=False,
+    render_threshold=0.05,
 )
 
-alg_configs["restart_silot"] = alg_configs["exp_silot"].copy(
-    initial_n_frames=6,
-    initial_count_prior_log_odds=0.0125,
-    end_training_wheels=1,
-    noise_schedule=0.0,
-)
-
-alg_configs["load_small_silot"] = alg_configs["exp_silot"].copy(
-    render_hook=SILOT_RenderHook(N=16),
-    load_path="/media/data/dps_data/local_experiments/test-spair-video_env=small-moving-mnist/exp_alg=exp-isspair_2019_05_16_00_28_54_seed=30001/weights/best_of_stage_0",
-    n_train=32,
+alg_configs["atari_eval_silot"] = alg_configs["conv_silot"].copy(
+    render_hook=SimpleSILOT_RenderHook(),
+    postprocessing="",
     do_train=False,
-    n_frames=3,
-    initial_n_frames=3,
-    n_prop_objects=4,
-
-    image_shape=(72, 72),
-    tile_shape=(36, 36),
-    min_digits=1,
-    max_digits=2,
-)
-
-alg_configs["load_silot"] = alg_configs["exp_silot"].copy(
-    load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=exp-isspair_2019_05_09_09_34_52_seed=893541943/weights/best_of_stage_0",
-    # load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=isspair_seed=9239644_2019_05_07_08_49_23/weights/best_of_stage_0",
-    n_train=4,
-    do_train=False,
-    n_frames=4,
-    initial_n_frames=4,
-)
-
-alg_configs["load_big_silot"] = alg_configs["exp_silot"].copy(
-    load_path="/media/data/dps_data/local_experiments/test-spair-video_env=moving-mnist/exp_alg=exp-isspair_2019_05_16_20_15_20_seed=23123/weights/best_of_stage_0",
-    render_hook=SILOT_RenderHook(N=16),
-    image_shape=(96, 96),
-    tile_shape=(48, 48),
-    min_digits=40,
-    max_digits=40,
-    n_train=16,
-    do_train=False,
-    n_frames=2,
-    initial_n_frames=2,
-    n_prop_objects=16*4,
+    eval_noisy=False,
+    curriculum=[dict()],
+    n_prop_objects=128,
+    render_threshold=0.05,
+    n_frames=16,
+    batch_size=4,
+    train_episode_range=(None, 1),
+    plot_prior=False,
 )
 
 alg_configs["test_silot"] = alg_configs["silot"].copy(
