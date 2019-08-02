@@ -55,14 +55,16 @@ else:
 config.update(
     min_shapes=args.max_shapes-9, max_shapes=args.max_shapes,
     stage_steps=40000, render_step=1000000,
-    final_count_prior_log_odds=2.5,
+    final_count_prior_log_odds=0.0125,
+    # final_count_prior_log_odds=2.5,
     curriculum=[
         dict(),
         dict(
             patience_start=1,
             lr_schedule=1. / 3 * 1e-4,
             initial_n_frames=8,
-            initial_count_prior_log_odds=2.5,
+            initial_count_prior_log_odds=0.0125,
+            # initial_count_prior_log_odds=2.5,
             end_training_wheels=1,
             noise_schedule=0.0,
         ),
@@ -70,7 +72,8 @@ config.update(
             patience_start=1,
             lr_schedule=1. / 9 * 1e-4,
             initial_n_frames=8,
-            initial_count_prior_log_odds=2.5,
+            initial_count_prior_log_odds=0.0125,
+            # initial_count_prior_log_odds=2.5,
             end_training_wheels=1,
             noise_schedule=0.0,
         ),

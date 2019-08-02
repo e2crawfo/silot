@@ -1099,10 +1099,22 @@ class SILOT_RenderHook(RenderHook):
 
 
 class SimpleSILOT_RenderHook(SILOT_RenderHook):
-    N = 16
+    N = 4
+
+    discovery_color = np.array(to_rgb("xkcd:neon green"))
+    propagation_color = np.array(to_rgb("xkcd:azure"))
 
     def build_fetches(self, updater):
-        return "output inp background offset"
+        select_names = "is_new render_obj normalized_box".split()
+        _fetches = Config(
+            post=Config(
+                select=Config(**{n: 0 for n in select_names}),
+            ),
+        )
+        fetches = list(_fetches.keys())
+
+        fetches.extend("output inp background offset".split())
+        return fetches
 
     def __call__(self, updater):
         fetched = self._fetch(updater)
@@ -1118,28 +1130,60 @@ class SimpleSILOT_RenderHook(SILOT_RenderHook):
             sess = tf.get_default_session()
             fetched = sess.run(self.to_fetch, feed_dict=feed_dict)
             fetched = Config(fetched)
+            self._prepare_fetched(updater, fetched)
 
             self._plot(updater, fetched, post=False)
 
     def _prepare_fetched(self, updater, fetched):
+        inp = fetched['inp']
+
+        N, T, image_height, image_width, _ = inp.shape
+
+        yt, xt, ys, xs = np.split(fetched.post.select.normalized_box, 4, axis=-1)
+        pixel_space_box = coords_to_pixel_space(
+            yt, xt, ys, xs, (image_height, image_width), updater.network.anchor_box, top_left=True)
+        fetched.post.select.pixel_space_box = np.concatenate(pixel_space_box, axis=-1)
+
         return fetched
 
     def _plot(self, updater, fetched, post):
         N, T, image_height, image_width, _ = fetched['inp'].shape
+        lw = self.linewidth
 
         for idx in range(self.N):
             fig, axes = plt.subplots(1, 2, figsize=(20, 10))
 
             def func(t):
-                ax = axes[0]
+                ax_inp = axes[0]
                 if t == 0:
-                    ax.set_title('inp')
-                self.imshow(ax, fetched['inp'][idx, t])
+                    ax_inp.set_title('inp')
+                self.imshow(ax_inp, fetched['inp'][idx, t])
 
-                ax = axes[1]
+                ax_outp = axes[1]
                 if t == 0:
-                    ax.set_title('output')
-                self.imshow(ax, fetched['output'][idx, t])
+                    ax_outp.set_title('output')
+                self.imshow(ax_outp, fetched['output'][idx, t])
+
+                flat_box = fetched.post.select.pixel_space_box[idx, t].reshape(-1, 4)
+                flat_is_new = fetched.post.select.is_new[idx, t].flatten()
+                flat_obj = fetched.post.select.render_obj[idx, t].flatten()
+
+                # Plot proposed bounding boxes
+                for o, is_new, (top, left, height, width) in zip(flat_obj, flat_is_new, flat_box):
+                    if is_new:
+                        color = self.discovery_color
+                    else:
+                        color = self.propagation_color
+
+                    if o > 0.0:
+                        rect = patches.Rectangle(
+                            (left, top), width, height, linewidth=lw, edgecolor=color, facecolor='none')
+                        ax_inp.add_patch(rect)
+
+                    if o > 0.0:
+                        rect = patches.Rectangle(
+                            (left, top), width, height, linewidth=lw, edgecolor=color, facecolor='none')
+                        ax_outp.add_patch(rect)
 
             plt.subplots_adjust(left=0.02, right=.98, top=.95, bottom=0.02, wspace=0.1, hspace=0.12)
 

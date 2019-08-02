@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 
 locs = [[0.5, 0.75], [0.25, 0.25], [0.1, 0.1]]
 
-stds = [0.15]
+# stds = [0.2]
+stds = [0.1, 0.15, 0.2]
 # stds = [0.1, 0.2, 0.3, 0.4]
 
 fig_unit_size = 3
@@ -27,8 +28,8 @@ for i, std in enumerate(stds):
         dist_x = norm(loc=x, scale=std)
         dist_y = norm(loc=y, scale=std)
 
-        x_activation = dist_x.pdf(np.linspace(0, 1, 20))
-        y_activation = dist_y.pdf(np.linspace(0, 1, 20))
+        x_activation = dist_x.pdf(np.linspace(0, 1, 48))
+        y_activation = dist_y.pdf(np.linspace(0, 1, 48))
 
         pdf = y_activation[:, None] * x_activation[None, :]
         pdfs[i, j] = pdf

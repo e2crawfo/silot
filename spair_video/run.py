@@ -1,6 +1,7 @@
 import numpy as np
 import tensorflow as tf
 import sonnet as snt
+import itertools
 
 from dps import cfg
 from dps.hyper import run_experiment
@@ -742,8 +743,12 @@ alg_configs["atari_eval_silot"] = alg_configs["conv_silot"].copy(
     do_train=False,
     eval_noisy=False,
     curriculum=[dict()],
-    n_prop_objects=64,
+    n_prop_objects=128,
     render_threshold=0.05,
+    n_frames=16,
+    batch_size=4,
+    train_episode_range=(None, 1),
+    plot_prior=False,
 )
 
 alg_configs["restart_conv_silot"] = alg_configs["conv_silot"].copy(
@@ -772,9 +777,9 @@ alg_configs["shapes_silot"] = alg_configs["conv_silot"].copy(
     color_logit_scale=1.0,
     alpha_logit_scale=1.0,
     alpha_logit_bias=3.0,
-    final_count_prior_log_odds=2.5,  # log_odds = 0.9
+    final_count_prior_log_odds=0.0125,  # log_odds = 0.9
     independent_prop=False,
-    kernel_std=0.1,
+    kernel_std=0.15,
     eval_noisy=False,
 )
 
@@ -789,6 +794,35 @@ alg_configs["eval_shapes_silot"] = alg_configs["shapes_silot"].copy(
     render_first=True,
     n_frames=8,
     initial_n_frames=8,
+)
+
+alg_configs["resume_shapes_silot"] = alg_configs["shapes_silot"].copy(
+    initial_n_frames=6,
+    initial_count_prior_log_odds=2.5,
+    end_training_wheels=1,
+    noise_schedule=0.0,
+    min_shapes=11,
+    max_shapes=20,
+    n_prop_objects=30,
+    curriculum=[
+        dict(),
+        dict(
+            patience_start=1,
+            lr_schedule=1. / 3 * 1e-4,
+            initial_n_frames=8,
+            initial_count_prior_log_odds=2.5,
+            end_training_wheels=1,
+            noise_schedule=0.0,
+        ),
+        dict(
+            patience_start=1,
+            lr_schedule=1. / 9 * 1e-4,
+            initial_n_frames=8,
+            initial_count_prior_log_odds=2.5,
+            end_training_wheels=1,
+            noise_schedule=0.0,
+        ),
+    ],
 )
 
 alg_configs["restart_silot"] = alg_configs["exp_silot"].copy(
@@ -868,6 +902,21 @@ alg_configs["test_silot"] = alg_configs["silot"].copy(
 
 
 def silot_mnist_eval_prepare_func():
+    from dps import cfg
+    spair_prepare_func()
+    if cfg.max_digits == 6:
+        experiment_path = "/scratch/e2crawfo/dps_data/parallel_experiments_run/aaai_2020_silot/mnist/run/run_env=moving-mnist_max-digits=6_alg=conv-silot_duration=long_2019_07_08_04_05_50_seed=0/experiments"
+    else:
+        experiment_path = "/scratch/e2crawfo/dps_data/parallel_experiments_run/aaai_2020_silot/mnist/run/run_env=moving-mnist_max-digits=12_alg=conv-silot_duration=long_2019_07_08_04_06_03_seed=0/experiments"
+
+    import os
+    dirs = os.listdir(experiment_path)
+    my_dir = sorted(dirs)[cfg.repeat]
+
+    cfg.load_path = os.path.join(experiment_path, my_dir, 'weights/best_of_stage_2')
+
+
+def silot_shapes_restart_prepare_func():
     from dps import cfg
     spair_prepare_func()
     if cfg.max_digits == 6:
@@ -1086,18 +1135,12 @@ def baseline_prepare_func():
     cfg.anchor_box = cfg.tile_shape
 
 
-n_values = 25
-cc_values = 3 * np.linspace(0, 1, n_values+2)[1:-1]
-# cosine_values = np.linspace(0, 1, n_values+2)[1:-1]
-# cc_values, cosine_values = zip(*itertools.product(cc_values, cosine_values))
-
 alg_configs['baseline'] = Config(
     build_network=BaselineTracker,
     render_hook=Baseline_RenderHook(N=16),
     prepare_func=baseline_prepare_func,
     stage_steps=None,
     initial_n_frames=8,
-    n_frames_scale=1,
     stopping_criteria="MOT:mota,max",
     threshold=np.inf,
 
@@ -1105,10 +1148,28 @@ alg_configs['baseline'] = Config(
 
     render_step=0,
     eval_step=1,
+    n_train=32,
+    n_val=128
+)
+
+n_values = 50
+cc_values = np.linspace(0.0001, 3.0001, n_values+2)
+
+alg_configs['mnist_baseline'] = alg_configs['baseline'].copy(
+    curriculum=[dict(min_digits=i, max_digits=i) for i in range(1, 13)],
     cc_threshold=LookupSchedule(cc_values),
-    # cosine_threshold=LookupSchedule(cosine_values),
     cosine_threshold=None,
     max_steps=len(cc_values),
+)
+
+cosine_values = np.linspace(0.0001, 1.0001, n_values+2)
+shapes_cc_values, cosine_values = zip(*itertools.product(cc_values, cosine_values))
+
+alg_configs['shapes_baseline'] = alg_configs['baseline'].copy(
+    curriculum=[dict(min_shapes=i, max_shapes=i) for i in range(1, 31)],
+    cc_threshold=LookupSchedule(shapes_cc_values),
+    cosine_threshold=LookupSchedule(cosine_values),
+    max_steps=len(shapes_cc_values),
 )
 
 

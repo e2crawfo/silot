@@ -266,10 +266,6 @@ class BaselineTracker(VideoNetwork):
              for k, v in program_tensors.items()
              if k != 'max_objects'}
         )
-        self.record_tensors(
-            cc_threshold=self.cc_threshold,
-            cosine_threshold=self.cosine_threshold if self.cosine_threshold is not None else tf.constant(0.0, tf.float32),
-        )
 
         if "n_annotations" in self._tensors:
             count_1norm = tf.to_float(
