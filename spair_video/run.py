@@ -260,6 +260,9 @@ env_configs["big_shapes"] = env_configs["shapes"].copy(
 env_configs["big_shapes_small"] = env_configs["big_shapes"].copy(
     postprocessing="random",
     n_samples_per_image=4,
+    tile_shape=(48, 48),
+    # tile_shape=(60, 60),
+    anchor_box=(48, 48),
 )
 
 env_configs['big_shapes_gen'] = env_configs['big_shapes'].copy(

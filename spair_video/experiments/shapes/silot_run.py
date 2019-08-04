@@ -38,19 +38,18 @@ durations = dict(
 config = basic_config.copy()
 if args.small:
     config.update(env_configs['big_shapes_small'])
-    config.n_prop_objects = 10
 else:
     config.update(env_configs['big_shapes'])
-    config.n_prop_objects = 30
 
 config.update(alg_configs['shapes_silot'])
 
 if args.small:
-    config.n_prop_objects = 10
     config.batch_size = 16
+    config.n_prop_objects = 36
 else:
-    config.n_prop_objects = 30
     config.batch_size = 8
+    config.n_prop_objects = 18
+
 
 config.update(
     min_shapes=args.max_shapes-9, max_shapes=args.max_shapes,
