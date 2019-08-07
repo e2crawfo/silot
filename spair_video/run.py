@@ -260,8 +260,7 @@ env_configs["big_shapes"] = env_configs["shapes"].copy(
 env_configs["big_shapes_small"] = env_configs["big_shapes"].copy(
     postprocessing="random",
     n_samples_per_image=4,
-    tile_shape=(48, 48),
-    # tile_shape=(60, 60),
+    tile_shape=(60, 60),
     anchor_box=(48, 48),
 )
 
@@ -284,7 +283,6 @@ atari_train_config = Config(
     anchor_box=(36, 36),
     tile_shape=(72, 72),
     postprocessing="random",
-    patch_shape=(14, 14),
     object_shape=(14, 14),
 
     n_frames=8,
@@ -662,16 +660,16 @@ alg_configs["silot"] = alg_configs["sspair"].copy(
             patience_start=1,
             lr_schedule=1. / 3 * 1e-4,
             initial_n_frames=8,
-            initial_count_prior_log_odds=0.0125,
-            end_training_wheels=1,
+            count_prior_log_odds=0.0125,
+            training_wheels=0.0,
             noise_schedule=0.0,
         ),
         dict(
             patience_start=1,
             lr_schedule=1. / 9 * 1e-4,
             initial_n_frames=8,
-            initial_count_prior_log_odds=0.0125,
-            end_training_wheels=1,
+            count_prior_log_odds=0.0125,
+            training_wheels=0.0,
             noise_schedule=0.0,
         ),
     ],
@@ -714,14 +712,14 @@ alg_configs["shapes_silot"] = alg_configs["conv_silot"].copy(
     eval_noisy=False,
 )
 
-alg_configs["eval_shapes_silot"] = alg_configs["shapes_silot"].copy(
+alg_configs["shapes_eval_silot"] = alg_configs["shapes_silot"].copy(
     postprocessing="",
     n_train=32,
     do_train=False,
     eval_noisy=False,
     render_threshold=0.05,
     curriculum=[dict()],
-    n_prop_objects=30,
+    n_prop_objects=36,
     render_first=True,
     n_frames=8,
     initial_n_frames=8,
@@ -736,9 +734,11 @@ alg_configs["atari_train_silot"] = alg_configs["conv_silot"].copy(
     render_first=True,
     plot_prior=False,
     final_count_prior_log_odds=0.0125,
-    n_prop_objects=32,
+    n_prop_objects=36,
     eval_noisy=False,
     render_threshold=0.05,
+    build_object_encoder=lambda scope: MLP(n_units=[512, 256], scope=scope),
+    build_object_decoder=lambda scope: MLP(n_units=[256, 512], scope=scope),
 )
 
 alg_configs["atari_eval_silot"] = alg_configs["conv_silot"].copy(

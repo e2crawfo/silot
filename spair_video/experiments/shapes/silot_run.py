@@ -45,10 +45,10 @@ config.update(alg_configs['shapes_silot'])
 
 if args.small:
     config.batch_size = 16
-    config.n_prop_objects = 36
+    config.n_prop_objects = 25
 else:
     config.batch_size = 8
-    config.n_prop_objects = 18
+    config.n_prop_objects = 36
 
 
 config.update(
