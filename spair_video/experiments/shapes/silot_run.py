@@ -1,7 +1,7 @@
 from dps.hyper import run_experiment
 from dps.utils import copy_update
 from dps.updater import DummyUpdater
-from spair_video.run import basic_config, alg_configs, env_configs
+from spair_video.run import basic_config, alg_configs, env_configs, silot_shapes_restart_prepare_func
 
 import argparse
 parser = argparse.ArgumentParser()
@@ -20,20 +20,30 @@ run_kwargs = dict(
 
 durations = dict(
     long=copy_update(run_kwargs),
+    restart=copy_update(
+        run_kwargs, wall_time="75hours", ppn=3, n_repeats=4,
+        config=dict(
+            restart_steps="0:135000 1:120000 2:135000 3:120000",
+            experiment_restart_path="/scratch/e2crawfo/dps_data/parallel_experiments_run/shapes-silot/run_env=big-shapes_max-shapes=30_alg=shapes-silot_duration=long_2019_08_01_07_44_41_seed=0/experiments",
+            prepare_func=silot_shapes_restart_prepare_func,
+        ),
+    ),
     short=dict(
-        wall_time="60mins", gpu_set="0", ppn=2, n_repeats=2, distributions=None,
+        wall_time="180mins", gpu_set="0", ppn=2, n_repeats=2, distributions=None, pmem=15000,
         config=dict(
             max_steps=3000, render_step=500, eval_step=500, display_step=100,
-            stage_steps=600, curriculum=[dict()]),
+            stage_steps=500, curriculum=[dict()]
+        ),
     ),
     build=dict(
-        ppn=1, cpp=3, gpu_set="0", wall_time="300mins", n_repeats=1, distributions=None,
+        ppn=1, cpp=3, gpu_set="0", wall_time="5hours", n_repeats=1, distributions=None,
         config=dict(
             do_train=False, get_updater=DummyUpdater, render_hook=None,
             curriculum=[dict()],
         )
     ),
 )
+durations["restart_short"] = copy_update(durations["restart"], wall_time="120mins")
 
 config = basic_config.copy()
 if args.small:

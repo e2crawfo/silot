@@ -13,7 +13,7 @@ readme = "Evaluate SQAIR experiment on moving_mnist."
 durations = dict(
     long=dict(
         max_hosts=1, ppn=6, cpp=2, gpu_set="0,1", pmem=10000, project="rpp-bengioy",
-        wall_time="12hours", cleanup_time="5mins", slack_time="5mins", n_repeats=6,
+        wall_time="4hours", cleanup_time="5mins", slack_time="5mins", n_repeats=6,
         copy_locally=True, distributions=None,
         config=dict(
             render_step=1000000,

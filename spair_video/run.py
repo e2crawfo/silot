@@ -933,16 +933,23 @@ def silot_mnist_eval_prepare_func():
 def silot_shapes_restart_prepare_func():
     from dps import cfg
     spair_prepare_func()
-    if cfg.max_digits == 6:
-        experiment_path = "/scratch/e2crawfo/dps_data/parallel_experiments_run/aaai_2020_silot/mnist/run/run_env=moving-mnist_max-digits=6_alg=conv-silot_duration=long_2019_07_08_04_05_50_seed=0/experiments"
-    else:
-        experiment_path = "/scratch/e2crawfo/dps_data/parallel_experiments_run/aaai_2020_silot/mnist/run/run_env=moving-mnist_max-digits=12_alg=conv-silot_duration=long_2019_07_08_04_06_03_seed=0/experiments"
 
+    # a string representation of a dict mapping from repeat (in original experiment) to restart step
+    restart_steps = dict([
+        (int(i) for i in s.split(':'))
+        for s in cfg.restart_steps.split()
+    ])
+
+    my_repeat = sorted(restart_steps.keys())[cfg.repeat]
+    my_restart_step = restart_steps[my_repeat]
+    cfg.start_from = "0,{}".format(my_restart_step)
+
+    experiment_path = cfg.experiment_restart_path
     import os
     dirs = os.listdir(experiment_path)
-    my_dir = sorted(dirs)[cfg.repeat]
-
-    cfg.load_path = os.path.join(experiment_path, my_dir, 'weights/best_of_stage_2')
+    my_dir = sorted(dirs)[my_repeat]
+    assert my_dir.startswith('exp_idx=0_repeat={}_'.format(my_repeat))
+    cfg.load_path = os.path.join(experiment_path, my_dir, 'weights/checkpoint_stage_0')
 
 
 # --- SQAIR ---
@@ -973,7 +980,17 @@ def sqair_mnist_eval_prepare_func():
     dirs = os.listdir(experiment_path)
     my_dir = sorted(dirs)[cfg.repeat]
 
-    cfg.load_path = os.path.join(experiment_path, my_dir, 'weights/best_of_stage_2')
+    stage = 2
+    while True:
+        cfg.load_path = os.path.join(experiment_path, my_dir, 'weights/best_of_stage_{}'.format(stage))
+
+        if os.path.exists(cfg.load_path + '.meta'):
+            break
+
+        stage -= 1
+
+        if stage < 0:
+            raise Exception("No valid weights found.")
 
 
 alg_configs['sqair'] = Config(
