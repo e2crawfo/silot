@@ -21,7 +21,7 @@ run_kwargs = dict(
 durations = dict(
     long=copy_update(run_kwargs),
     restart=copy_update(
-        run_kwargs, wall_time="75hours", ppn=3, n_repeats=4,
+        run_kwargs, wall_time="75hours",
         config=dict(
             restart_steps="0:135000 1:120000 2:135000 3:120000",
             experiment_restart_path="/scratch/e2crawfo/dps_data/parallel_experiments_run/shapes-silot/run_env=big-shapes_max-shapes=30_alg=shapes-silot_duration=long_2019_08_01_07_44_41_seed=0/experiments",
