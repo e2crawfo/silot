@@ -24,12 +24,14 @@ max_pdf = 0.0
 pdfs = np.zeros((len(stds), len(locs)), dtype=np.object)
 
 for i, std in enumerate(stds):
+    print(std)
     for j, (x, y) in enumerate(locs):
         dist_x = norm(loc=x, scale=std)
         dist_y = norm(loc=y, scale=std)
 
         x_activation = dist_x.pdf(np.linspace(0, 1, 48))
         y_activation = dist_y.pdf(np.linspace(0, 1, 48))
+        print(x_activation / x_activation.max())
 
         pdf = y_activation[:, None] * x_activation[None, :]
         pdfs[i, j] = pdf

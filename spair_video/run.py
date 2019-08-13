@@ -694,8 +694,8 @@ alg_configs["conv_silot_plot"] = alg_configs["conv_silot"].copy(
     render_hook=PaperSILOT_RenderHook(N=16),
     n_train=32,
     do_train=False,
-    n_frames=16,
-    initial_n_frames=16,
+    n_frames=8,
+    initial_n_frames=8,
     eval_noisy=False,
     render_threshold=0.05,
     curriculum=[dict()],
@@ -1045,6 +1045,42 @@ alg_configs['mnist_baseline'] = alg_configs['baseline'].copy(
     cc_threshold=LookupSchedule(cc_values),
     cosine_threshold=None,
     max_steps=len(cc_values),
+)
+
+test_cc_threshold_AP = [
+    9.999999747378753e-05, 9.999999747378753e-05, 9.999999747378753e-05, 9.999999747378753e-05, 0.4706882238388062,
+    0.5883352756500244, 0.5295117497444153, 0.6471588015556335, 0.7059823274612427, 0.8236294388771057,
+    0.7059823274612427, 0.7648058533668518
+]
+
+test_cc_threshold_count_1norm = [
+    9.999999747378753e-05, 0.411864697933197, 0.6471588015556335, 0.7648058533668518, 0.7059823274612427,
+    1.0001000165939329, 1.0589234828948977, 1.0001000165939329, 1.1765705347061155, 1.2353941202163696,
+    1.2942177057266235, 1.353041172027588,
+]
+
+test_cc_threshold_mota = [
+    9.999999747378753e-05, 0.411864697933197, 0.4706882238388062, 0.5295117497444153, 0.5883352756500244,
+    0.5883352756500244, 0.5295117497444153, 0.6471588015556335, 0.5883352756500244, 0.5883352756500244,
+    0.6471588015556335, 0.6471588015556335,
+]
+
+alg_configs['mnist_baseline_test'] = alg_configs['mnist_baseline'].copy(
+    do_train=False,
+    cc_threshold=LookupSchedule(cc_values),
+    cosine_threshold=None,
+)
+
+alg_configs['mnist_baseline_AP'] = alg_configs['mnist_baseline_test'].copy(
+    curriculum=[dict(min_digits=i+1, max_digits=i+1, cc_threshold=cct) for i, cct in enumerate(test_cc_threshold_AP)]
+)
+
+alg_configs['mnist_baseline_count_1norm'] = alg_configs['mnist_baseline_test'].copy(
+    curriculum=[dict(min_digits=i+1, max_digits=i+1, cc_threshold=cct) for i, cct in enumerate(test_cc_threshold_count_1norm)]
+)
+
+alg_configs['mnist_baseline_mota'] = alg_configs['mnist_baseline_test'].copy(
+    curriculum=[dict(min_digits=i+1, max_digits=i+1, cc_threshold=cct) for i, cct in enumerate(test_cc_threshold_mota)]
 )
 
 cosine_values = np.linspace(0.0001, 1.0001, n_values+2)

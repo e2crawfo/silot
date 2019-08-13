@@ -7,6 +7,7 @@ from collections import defaultdict, OrderedDict
 
 import matplotlib.pyplot as plt
 from dps.hyper import HyperSearch
+from dps.train import FrozenTrainingLoopData
 from dps.utils import (
     process_path, Config, sha_cache, set_clear_cache,
     confidence_interval, standard_error, grid_subplots
@@ -141,34 +142,65 @@ def get_mnist_data(path, y_keys, spread_measure):
     return data_stats
 
 
+@sha_cache(cache_dir, verbose=verbose_cache)
+def get_mnist_baseline_data(path, y):
+    data = FrozenTrainingLoopData(path)
+    data = pd.DataFrame.from_records(data.history)
+    return list(range(1, 13)), data['_test_' + y]
+
+
 def tex(s):
     return s.replace('_', '\_')
 
 
-def plot_mnist_n_digits(extension):
+def plot_mnist_post(extension):
+    return _plot_mnist(extension, False)
+
+
+def plot_mnist_prior(extension):
+    return _plot_mnist(extension, True)
+
+
+def _plot_mnist(extension, prior):
     eval_dir = os.path.join(data_dir, 'mnist/eval')
 
     data_paths = {
         ('SILOT', 'silot', 12): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=12_alg=conv-silot_duration=long_2019_07_25_22_45_23_seed=0'),
         ('SILOT', 'silot', 6): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=6_alg=conv-silot_duration=long_2019_07_25_22_45_08_seed=0'),
 
-        # ('SQAIR (conv)', 'conv_sqair', 12): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=12_alg=conv-sqair_duration=long_2019_07_25_22_46_21_seed=0'),
+        # ('SQAIR (conv)', 'conv_sqair', 12): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=12_alg=conv-sqair_duration=long_2019_07_30_11_35_31_seed=0'),
         ('SQAIR (conv)', 'conv_sqair', 6): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=6_alg=conv-sqair_duration=long_2019_07_25_22_46_07_seed=0'),
 
-        ('SQAIR (mlp)', 'sqair', 12): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=12_alg=sqair_duration=long_2019_07_25_22_45_53_seed=0'),
+        # ('SQAIR (mlp)', 'sqair', 12): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=12_alg=sqair_duration=long_2019_07_25_22_45_53_seed=0'),
         ('SQAIR (mlp)', 'sqair', 6): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=6_alg=sqair_duration=long_2019_07_25_22_45_38_seed=0'),
     }
 
     xlabel = '\# Digits in Test Image'
     xticks = [0, 2, 4, 6, 8, 10, 12]
 
-    ax_params = OrderedDict({
-        "MOT:mota": dict(ylabel='MOTA', ylim=(-1.05, 1.05)),
-        "AP": dict(ylabel='AP', ylim=(-0.05, 1.05)),
-        "count_1norm": dict(ylabel='Count Abs. Error', ylim=(-0.05, 4.0),),
-        "prior_MOT:mota": dict(ylabel='Prior MOTA', ylim=(-1.05, 1.05)),
-        "prior_AP": dict(ylabel='Prior AP', ylim=(-0.05, 1.05)),
-    })
+    if prior:
+        ax_params = OrderedDict({
+            "prior_MOT:mota": dict(ylabel='Prior MOTA', ylim=(-1.05, 1.05)),
+            "prior_AP": dict(ylabel='Prior AP', ylim=(-0.05, 1.05)),
+        })
+        baseline_data = {
+            'prior_AP': get_mnist_baseline_data(os.path.join(eval_dir, 'exp_alg=mnist-baseline-AP_2019_08_07_14_34_43_seed=1113481622'), 'AP'),
+            'prior_MOT:mota': get_mnist_baseline_data(os.path.join(eval_dir, 'exp_alg=mnist-baseline-mota_2019_08_07_14_44_38_seed=1470331190'), 'MOT:mota'),
+        }
+    else:
+        ax_params = OrderedDict({
+            "MOT:mota": dict(ylabel='MOTA', ylim=(-1.05, 1.05)),
+            "AP": dict(ylabel='AP', ylim=(-0.05, 1.05)),
+            "count_1norm": dict(ylabel='Count Abs. Error', ylim=(-0.05, 4.0),),
+        })
+
+        baseline_data = {
+            'AP': get_mnist_baseline_data(os.path.join(eval_dir, 'exp_alg=mnist-baseline-AP_2019_08_07_14_34_43_seed=1113481622'), 'AP'),
+            'MOT:mota': get_mnist_baseline_data(os.path.join(eval_dir, 'exp_alg=mnist-baseline-mota_2019_08_07_14_44_38_seed=1470331190'), 'MOT:mota'),
+            'count_1norm': get_mnist_baseline_data(os.path.join(eval_dir, 'exp_alg=mnist-baseline-count-1norm_2019_08_07_17_24_28_seed=1920714344'), 'count_1norm'),
+        }
+
+    baseline_name = 'ConnComp'
 
     measures = list(ax_params.keys())
     n_measures = len(measures)
@@ -182,11 +214,13 @@ def plot_mnist_n_digits(extension):
 
     for (measure, axp), ax in zip(ax_params.items(), axes):
         for (title, kind, max_train_digits), dset in data_sets.items():
-            label = tex("{} trained on 1--{}".format(title, max_train_digits))
+            label = tex("{} - trained on 1--{} digits".format(title, max_train_digits))
             x, y, *yerr = dset[measure]
             ax.errorbar(x, y, yerr=yerr, label=label)
 
-        fontsize = None
+        ax.plot(*baseline_data[measure], label=baseline_name, ls='--')
+
+        fontsize = 12
         labelsize = None
 
         ax.set_ylabel(axp['ylabel'], fontsize=fontsize)
@@ -196,6 +230,13 @@ def plot_mnist_n_digits(extension):
         ax.set_xticks(xticks)
 
     axes[0].legend(loc="lower left", fontsize=8)
+    plt.subplots_adjust(left=0.07, bottom=0.15, right=0.98, top=0.94, wspace=.24)
+
+    name = "prior" if prior else "post"
+
+    plot_path = os.path.join(plot_dir, 'mnist', name + extension)
+    os.makedirs(os.path.dirname(plot_path), exist_ok=True)
+    fig.savefig(plot_path)
 
 
 if __name__ == "__main__":
@@ -217,9 +258,11 @@ if __name__ == "__main__":
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--clear-cache", action="store_true")
     parser.add_argument("--paper", action="store_true")
-    parser.add_argument("--ext", default="pdf")
+    parser.add_argument("--ext", default=".pdf")
     args = parser.parse_args()
     plt.rc('lines', linewidth=1)
+    ext = args.ext
+    ext = ext if ext.startswith('.') else '.' + ext
 
     color_cycle = plt.get_cmap("Dark2").colors
     # color_cycle = plt.get_cmap("Paired").colors
@@ -237,7 +280,7 @@ if __name__ == "__main__":
 
         for name, do_plot in funcs.items():
             if name in args.plots:
-                fig = do_plot(args.ext)
+                fig = do_plot(ext)
 
                 if args.show:
                     plt.show(block=not args.no_block)
