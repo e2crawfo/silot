@@ -6,6 +6,7 @@ import pandas as pd
 from collections import defaultdict, OrderedDict
 
 import matplotlib.pyplot as plt
+from dps import cfg
 from dps.hyper import HyperSearch
 from dps.train import FrozenTrainingLoopData
 from dps.utils import (
@@ -153,15 +154,15 @@ def tex(s):
     return s.replace('_', '\_')
 
 
-def plot_mnist_post(extension):
-    return _plot_mnist(extension, False)
+def plot_mnist_post():
+    return _plot_mnist(False)
 
 
-def plot_mnist_prior(extension):
-    return _plot_mnist(extension, True)
+def plot_mnist_prior():
+    return _plot_mnist(True)
 
 
-def _plot_mnist(extension, prior):
+def _plot_mnist(prior):
     eval_dir = os.path.join(data_dir, 'mnist/eval')
 
     data_paths = {
@@ -234,7 +235,171 @@ def _plot_mnist(extension, prior):
 
     name = "prior" if prior else "post"
 
-    plot_path = os.path.join(plot_dir, 'mnist', name + extension)
+    plot_path = os.path.join(plot_dir, 'mnist', name + cfg.ext)
+    os.makedirs(os.path.dirname(plot_path), exist_ok=True)
+    fig.savefig(plot_path)
+
+
+@sha_cache(cache_dir, verbose=verbose_cache)
+def get_shapes_data(paths, y_keys, spread_measure):
+    data = defaultdict(list)
+    x = np.arange(1, 36)
+    for path in paths:
+        ignore = []
+
+        # For two of the experiments, the training stalled just before starting the 4th stage, so ignore those samples.
+        if 'max-shapes=10_small=False_alg=shapes-silot_duration=long_2019_08_13_00_00_51_seed=0' in path:
+            ignore = [1]
+        if 'max-shapes=20_small=False_alg=shapes-silot_duration=long_2019_08_19_17_30_18_seed=0' in path:
+            ignore = [2]
+
+        if isinstance(y_keys, str):
+            y_keys = y_keys.split()
+
+        if not isinstance(y_keys, dict):
+            y_keys = {yk: lambda y: y for yk in y_keys}
+
+        job = HyperSearch(path)
+        stage_data = job.extract_stage_data()
+
+        for (idx, _), d in stage_data.items():
+            if idx in ignore:
+                continue
+
+            assert len(d) == 1
+            df = next(iter(d.values()))[0]
+            for yk, _ in y_keys.items():
+                data[yk].append(df['_test_' + yk][x-1])
+
+    x = list(x)
+    data_stats = {}
+    for yk, func in y_keys.items():
+        data_yk = np.array(data[yk]).T
+        data_yk = func(data_yk)
+
+        y = data_yk.mean(axis=1)
+        yu, yl = spread_measures[spread_measure](data_yk)
+
+        data_stats[yk] = (x, y, yu, yl)
+
+    return data_stats
+
+
+@sha_cache(cache_dir, verbose=verbose_cache)
+def get_shapes_baseline_data(path, y):
+    data = FrozenTrainingLoopData(path)
+    data = pd.DataFrame.from_records(data.history)
+    return [1, 5, 10, 15, 20, 25, 30, 35], data['_test_' + y]
+
+
+def plot_shapes_post():
+    return _plot_shapes(False)
+
+
+def plot_shapes_prior():
+    return _plot_shapes(True)
+
+
+def _plot_shapes(prior):
+    eval_dir = os.path.join(data_dir, 'shapes/eval')
+
+    if 0:
+        data_paths = {
+            ('SILOT', 'silot', 10, True): ['run_env=big-shapes_max-shapes=10_small=True_alg=shapes-silot_duration=long_2019_08_19_17_30_03_seed=0'],
+            ('SILOT', 'silot', 20, True): ['run_env=big-shapes_max-shapes=20_small=True_alg=shapes-silot_duration=long_2019_08_24_14_26_42_seed=0'],
+            ('SILOT', 'silot', 30, True): ['run_env=big-shapes_max-shapes=30_small=True_alg=shapes-silot_duration=long_2019_08_13_00_01_35_seed=0'],
+        }
+    else:
+        data_paths = {
+            ('SILOT', 'silot', 10, False): [
+                # 'run_env=big-shapes_max-shapes=10_small=False_alg=shapes-silot_duration=long_2019_08_13_00_00_51_seed=0',
+                'run_env=big-shapes_max-shapes=10_small=False_alg=shapes-silot_duration=long_restart_2019_08_24_14_26_55_seed=0',
+            ],
+            ('SILOT', 'silot', 20, False): [
+                # 'run_env=big-shapes_max-shapes=20_small=False_alg=shapes-silot_duration=long_2019_08_19_17_30_18_seed=0',
+                'run_env=big-shapes_max-shapes=20_small=False_alg=shapes-silot_duration=long_restart_2019_08_24_14_27_08_seed=0',
+            ],
+            ('SILOT', 'silot', 30, False): ['run_env=big-shapes_max-shapes=30_small=False_alg=shapes-silot_duration=long_2019_08_13_00_01_20_seed=0'],
+        }
+
+    data_paths = {
+        k: [os.path.join(eval_dir, d) for d in v]
+        for k, v in data_paths.items()}
+
+    xlabel = '\# Shapes in Test Image'
+    xticks = list(np.arange(0, 36, 5))
+
+    if prior:
+        ax_params = OrderedDict({
+            "prior_MOT:mota": dict(ylabel='Prior MOTA', ylim=(-1.05, 1.05)),
+            "prior_AP": dict(ylabel='Prior AP', ylim=(-0.05, 1.05)),
+        })
+
+        baseline_data = {
+            'prior_AP': get_shapes_baseline_data(os.path.join(eval_dir, 'exp_alg=shapes-baseline-AP_2019_08_24_13_38_53_seed=1871884615'), 'AP'),
+            'prior_MOT:mota': get_shapes_baseline_data(os.path.join(eval_dir, 'exp_alg=shapes-baseline-mota_2019_08_24_13_53_45_seed=1780273483'), 'MOT:mota'),
+        }
+
+    else:
+        ax_params = OrderedDict({
+            "MOT:mota": dict(ylabel='MOTA', ylim=(-1.05, 1.05)),
+            "AP": dict(ylabel='AP', ylim=(-0.05, 1.05)),
+            "count_1norm": dict(ylabel='Count Abs. Error', ylim=(-0.05, 4.0),),
+        })
+
+        baseline_data = {
+            'AP': get_shapes_baseline_data(os.path.join(eval_dir, 'exp_alg=shapes-baseline-AP_2019_08_24_13_38_53_seed=1871884615'), 'AP'),
+            'MOT:mota': get_shapes_baseline_data(os.path.join(eval_dir, 'exp_alg=shapes-baseline-mota_2019_08_24_13_53_45_seed=1780273483'), 'MOT:mota'),
+            'count_1norm': get_shapes_baseline_data(os.path.join(eval_dir, 'exp_alg=shapes-baseline-count-1norm_2019_08_24_13_45_14_seed=2069764008'), 'count_1norm'),
+        }
+
+    baseline_name = 'ConnComp'
+
+    measures = list(ax_params.keys())
+    n_measures = len(measures)
+
+    fig_unit_size = 3
+
+    fig, axes = grid_subplots(1, n_measures, fig_unit_size)
+    axes = axes.reshape(-1)
+
+    data_sets = {key: get_shapes_data(paths, measures, "ci95") for key, paths in data_paths.items()}
+
+    for (measure, axp), ax in zip(ax_params.items(), axes):
+        for (title, kind, max_train_shapes, small), dset in data_sets.items():
+            size = "Small" if small else "Big"
+            # ls = '--' if small else '-'
+            ls = '-'
+            label = tex("{} - trained on {}--{} shapes".format(size, max_train_shapes-9, max_train_shapes,))
+            x, y, *yerr = dset[measure]
+
+            if cfg.fill:
+                line = ax.plot(x, y, label=label, ls=ls)
+                c = line[0].get_c()
+                yu = y + yerr[0]
+                yl = y - yerr[1]
+                ax.fill_between(x, yl, yu, color=c, alpha=0.25)
+            else:
+                ax.errorbar(x, y, yerr=yerr, label=label, ls=ls)
+
+        if baseline_data is not None:
+            ax.plot(*baseline_data[measure], label=baseline_name, ls='--')
+
+        fontsize = 12
+        labelsize = None
+
+        ax.set_ylabel(axp['ylabel'], fontsize=fontsize)
+        ax.tick_params(axis='both', labelsize=labelsize)
+        ax.set_ylim(axp['ylim'])
+        ax.set_xlabel(xlabel, fontsize=fontsize)
+        ax.set_xticks(xticks)
+
+    axes[0].legend(loc="lower left", fontsize=8)
+    plt.subplots_adjust(left=0.07, bottom=0.15, right=0.98, top=0.94, wspace=.24)
+
+    name = "prior" if prior else "post"
+
+    plot_path = os.path.join(plot_dir, 'shapes', name + cfg.ext)
     os.makedirs(os.path.dirname(plot_path), exist_ok=True)
     fig.savefig(plot_path)
 
@@ -259,6 +424,7 @@ if __name__ == "__main__":
     parser.add_argument("--clear-cache", action="store_true")
     parser.add_argument("--paper", action="store_true")
     parser.add_argument("--ext", default=".pdf")
+    parser.add_argument("--fill", action='store_true')
     args = parser.parse_args()
     plt.rc('lines', linewidth=1)
     ext = args.ext
@@ -273,14 +439,20 @@ if __name__ == "__main__":
     if args.clear_cache:
         set_clear_cache(True)
 
+    config = Config(
+        fill=args.fill,
+        ext=ext,
+    )
+
     with plt.style.context(args.style):
-        plt.rc('axes', prop_cycle=(cycler('color', color_cycle)))
+        with config:
+            plt.rc('axes', prop_cycle=(cycler('color', color_cycle)))
 
-        print(funcs)
+            print(funcs)
 
-        for name, do_plot in funcs.items():
-            if name in args.plots:
-                fig = do_plot(ext)
+            for name, do_plot in funcs.items():
+                if name in args.plots:
+                    fig = do_plot()
 
-                if args.show:
-                    plt.show(block=not args.no_block)
+                    if args.show:
+                        plt.show(block=not args.no_block)

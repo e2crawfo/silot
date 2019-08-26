@@ -8,7 +8,7 @@ from orderedattrdict import AttrDict
 import motmetrics as mm
 
 from dps import cfg
-from dps.utils import Param, animate
+from dps.utils import Param, animate, timed_block
 from dps.utils.tf import (
     build_scheduled_value, FIXED_COLLECTION, tf_mean_sum, MLP,
     RenderHook, tf_shape, ConvNet, RecurrentGridConvNet,
@@ -94,41 +94,51 @@ class MOTMetrics:
         return obj, pred_n_objects, pred_ids, top, left, height, width
 
     def __call__(self, tensors, updater):
-        obj, pred_n_objects, pred_ids, top, left, height, width = self._process_data(tensors, updater)
+        with timed_block("process_data"):
+            obj, pred_n_objects, pred_ids, top, left, height, width = self._process_data(tensors, updater)
+
         annotations = tensors["annotations"]
         batch_size, n_frames, n_objects = obj.shape[:3]
 
         accumulators = []
 
-        for b in range(batch_size):
-            acc = mm.MOTAccumulator(auto_id=True)
+        with timed_block("accumulate"):
+            for b in range(batch_size):
+                acc = mm.MOTAccumulator(auto_id=True)
 
-            for f in range(self.start_frame, min(self.end_frame, n_frames)):
-                gt_ids = [int(_id) for valid, _, _id, *_ in annotations[b, f] if float(valid) > 0.5]
-                gt_boxes = [
-                    (top, left, bottom-top, right-left)
-                    for valid, _, _, top, bottom, left, right in annotations[b, f]
-                    if float(valid) > 0.5]
+                for f in range(self.start_frame, min(self.end_frame, n_frames)):
+                    gt_ids = [int(_id) for valid, _, _id, *_ in annotations[b, f] if float(valid) > 0.5]
+                    gt_boxes = [
+                        (top, left, bottom-top, right-left)
+                        for valid, _, _, top, bottom, left, right in annotations[b, f]
+                        if float(valid) > 0.5]
 
-                _pred_ids = [int(j) for j in pred_ids[b, f] if j >= 0]
-                pred_boxes = []
+                    _pred_ids = [int(j) for j in pred_ids[b, f] if j >= 0]
+                    pred_boxes = []
 
-                for i in range(int(pred_n_objects[b, f])):
-                    if obj[b, f, i] > 0.5:
-                        pred_boxes.append([top[b, f, i], left[b, f, i], height[b, f, i], width[b, f, i]])
+                    for i in range(int(pred_n_objects[b, f])):
+                        if obj[b, f, i] > 0.5:
+                            pred_boxes.append([top[b, f, i], left[b, f, i], height[b, f, i], width[b, f, i]])
 
-                distances = mm.distances.iou_matrix(gt_boxes, pred_boxes, max_iou=0.5)
-                acc.update(gt_ids, _pred_ids, distances)
-            accumulators.append(acc)
+                    # Speed things up for really bad trackers
+                    if len(pred_boxes) > 2 * len(gt_boxes):
+                        pred_boxes = []
+                        _pred_ids = []
+
+                    distances = mm.distances.iou_matrix(gt_boxes, pred_boxes, max_iou=0.5)
+                    acc.update(gt_ids, _pred_ids, distances)
+                accumulators.append(acc)
 
         mh = mm.metrics.create()
-        summary = mh.compute_many(
-            accumulators,
-            metrics=['mota'],
-            # metrics=['mota', 'idf1'],
-            names=[str(i) for i in range(len(accumulators))],
-            generate_overall=True
-        )
+
+        with timed_block("compute"):
+            summary = mh.compute_many(
+                accumulators,
+                metrics=['mota'],
+                # metrics=['mota', 'idf1'],
+                names=[str(i) for i in range(len(accumulators))],
+                generate_overall=True
+            )
         return dict(summary.loc['OVERALL'])
 
 

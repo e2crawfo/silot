@@ -1099,7 +1099,7 @@ class SILOT_RenderHook(RenderHook):
 
 
 class SimpleSILOT_RenderHook(SILOT_RenderHook):
-    N = 4
+    N = 32
 
     discovery_color = np.array(to_rgb("xkcd:neon green"))
     propagation_color = np.array(to_rgb("xkcd:azure"))
@@ -1150,7 +1150,7 @@ class SimpleSILOT_RenderHook(SILOT_RenderHook):
         N, T, image_height, image_width, _ = fetched['inp'].shape
         lw = self.linewidth
 
-        for idx in range(self.N):
+        for idx in range(N):
             fig, axes = plt.subplots(1, 2, figsize=(20, 10))
 
             def func(t):

@@ -5,7 +5,7 @@ import itertools
 
 from dps import cfg
 from dps.hyper import run_experiment
-from dps.utils import Config
+from dps.utils import Config, copy_update
 from dps.datasets.base import VisualArithmeticDataset, Environment
 from dps.datasets.shapes import RandomShapesDataset
 from dps.datasets.atari import AtariVideoDataset
@@ -20,7 +20,7 @@ from spair_video.seq_air import SQAIR, SQAIRUpdater, SQAIR_RenderHook
 from spair_video.sspair import SequentialSpair, SequentialSpair_RenderHook
 from spair_video.silot import SILOT, SILOT_RenderHook, SimpleSILOT_RenderHook, PaperSILOT_RenderHook
 from spair_video.background_only import BackgroundOnly, BackgroundOnly_RenderHook
-from spair_video.baseline import BaselineTracker, Baseline_RenderHook
+from spair_video.baseline import BaselineTracker, Baseline_RenderHook, BaselineUpdater
 
 
 class MovingMNIST(Environment):
@@ -252,6 +252,7 @@ env_configs["shapes"] = Config(
 env_configs["big_shapes"] = env_configs["shapes"].copy(
     image_shape=(96, 96),
     tile_shape=(48, 48),
+    anchor_box=(48, 48),
     min_shapes=10,
     max_shapes=20,
     n_objects=30,
@@ -319,9 +320,9 @@ env_configs["asteroids_train"] = atari_train_config.copy(
 
 env_configs["centipede_train"] = atari_train_config.copy(
     atari_game="Centipede",
-    train_episode_range=(None, 30),
-    val_episode_range=(30, 32),
-    test_episode_range=(32, 34),
+    train_episode_range=(None, 55),
+    val_episode_range=(55, 60),
+    test_episode_range=(60, None),
 )
 
 # --- WIZARD OF WOR ---
@@ -741,18 +742,20 @@ alg_configs["atari_train_silot"] = alg_configs["conv_silot"].copy(
     build_object_decoder=lambda scope: MLP(n_units=[256, 512], scope=scope),
 )
 
-alg_configs["atari_eval_silot"] = alg_configs["conv_silot"].copy(
+alg_configs["atari_eval_silot"] = alg_configs["atari_train_silot"].copy(
     render_hook=SimpleSILOT_RenderHook(),
     postprocessing="",
     do_train=False,
-    eval_noisy=False,
     curriculum=[dict()],
     n_prop_objects=128,
-    render_threshold=0.05,
     n_frames=16,
-    batch_size=4,
+    batch_size=16,
     train_episode_range=(None, 1),
-    plot_prior=False,
+    val_episode_range=(1, None),
+    test_episode_range=(1, None),
+    plot_prior=True,
+    render_first=True,
+    render_final=False,
 )
 
 alg_configs["test_silot"] = alg_configs["silot"].copy(
@@ -1021,6 +1024,7 @@ def baseline_prepare_func():
 
 
 alg_configs['baseline'] = Config(
+    get_updater=BaselineUpdater,
     build_network=BaselineTracker,
     render_hook=Baseline_RenderHook(N=16),
     prepare_func=baseline_prepare_func,
@@ -1083,14 +1087,95 @@ alg_configs['mnist_baseline_mota'] = alg_configs['mnist_baseline_test'].copy(
     curriculum=[dict(min_digits=i+1, max_digits=i+1, cc_threshold=cct) for i, cct in enumerate(test_cc_threshold_mota)]
 )
 
+n_values = 25
 cosine_values = np.linspace(0.0001, 1.0001, n_values+2)
 shapes_cc_values, cosine_values = zip(*itertools.product(cc_values, cosine_values))
 
+shapes_baseline_n_shapes = [1, 5, 10, 15, 20, 25, 30, 35]
+
 alg_configs['shapes_baseline'] = alg_configs['baseline'].copy(
-    curriculum=[dict(min_shapes=i, max_shapes=i) for i in range(1, 31)],
+    curriculum=[dict(min_shapes=i, max_shapes=i) for i in shapes_baseline_n_shapes],
     cc_threshold=LookupSchedule(shapes_cc_values),
     cosine_threshold=LookupSchedule(cosine_values),
     max_steps=len(shapes_cc_values),
+)
+
+shapes_baseline_values = {
+    'AP': [{'cc_threshold': 9.999999747378753e-05,
+            'cosine_threshold': 0.7308692336082458},
+           {'cc_threshold': 0.058923527598381036,
+            'cosine_threshold': 0.8847153782844543},
+           {'cc_threshold': 9.999999747378753e-05,
+            'cosine_threshold': 0.9616384506225586},
+           {'cc_threshold': 9.999999747378753e-05,
+            'cosine_threshold': 0.9616384506225586},
+           {'cc_threshold': 9.999999747378753e-05,
+            'cosine_threshold': 0.9616384506225586},
+           {'cc_threshold': 0.058923527598381036,
+            'cosine_threshold': 0.9616384506225586},
+           {'cc_threshold': 0.11774706095457076,
+            'cosine_threshold': 0.9616384506225586},
+           {'cc_threshold': 9.999999747378753e-05,
+            'cosine_threshold': 0.9616384506225586}
+    ],
+    'MOT:mota': [{'cc_threshold': 9.999999747378753e-05,
+                  'cosine_threshold': 0.7308692336082458},
+                 {'cc_threshold': 0.058923527598381036,
+                  'cosine_threshold': 0.8847153782844543},
+                 {'cc_threshold': 9.999999747378753e-05,
+                  'cosine_threshold': 0.9616384506225586},
+                 {'cc_threshold': 9.999999747378753e-05,
+                  'cosine_threshold': 0.9616384506225586},
+                 {'cc_threshold': 9.999999747378753e-05,
+                  'cosine_threshold': 0.9616384506225586},
+                 {'cc_threshold': 0.8236294388771057,
+                  'cosine_threshold': 0.9616384506225586},
+                 {'cc_threshold': 1.353041172027588,
+                  'cosine_threshold': 0.9616384506225586},
+                 {'cc_threshold': 9.999999747378753e-05,
+                  'cosine_threshold': 1.0001000165939329}
+    ],
+    'count_1norm': [{'cc_threshold': 9.999999747378753e-05,
+                     'cosine_threshold': 0.7308692336082458},
+                    {'cc_threshold': 9.999999747378753e-05,
+                     'cosine_threshold': 0.9616384506225586},
+                    {'cc_threshold': 0.8236294388771057,
+                     'cosine_threshold': 0.9616384506225586},
+                    {'cc_threshold': 0.8236294388771057,
+                     'cosine_threshold': 0.9616384506225586},
+                    {'cc_threshold': 0.8236294388771057,
+                     'cosine_threshold': 0.9616384506225586},
+                    {'cc_threshold': 0.8236294388771057,
+                     'cosine_threshold': 0.9616384506225586},
+                    {'cc_threshold': 0.8236294388771057,
+                     'cosine_threshold': 0.9616384506225586},
+                    {'cc_threshold': 0.8236294388771057,
+                     'cosine_threshold': 0.9616384506225586}
+    ],
+}
+
+alg_configs['shapes_baseline_test'] = alg_configs['shapes_baseline'].copy(
+    do_train=False,
+    cc_threshold=None,
+    cosine_threshold=None,
+)
+
+alg_configs['shapes_baseline_AP'] = alg_configs['shapes_baseline_test'].copy(
+    curriculum=[
+        copy_update(v, min_shapes=i, max_shapes=i)
+        for i, v in zip(shapes_baseline_n_shapes, shapes_baseline_values['AP'])]
+)
+
+alg_configs['shapes_baseline_count_1norm'] = alg_configs['shapes_baseline_test'].copy(
+    curriculum=[
+        copy_update(v, min_shapes=i, max_shapes=i)
+        for i, v in zip(shapes_baseline_n_shapes, shapes_baseline_values['count_1norm'])]
+)
+
+alg_configs['shapes_baseline_mota'] = alg_configs['shapes_baseline_test'].copy(
+    curriculum=[
+        copy_update(v, min_shapes=i, max_shapes=i)
+        for i, v in zip(shapes_baseline_n_shapes, shapes_baseline_values['MOT:mota'])]
 )
 
 

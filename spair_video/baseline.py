@@ -11,7 +11,7 @@ from dps.utils.tf import tf_shape, RenderHook, build_scheduled_value
 from dps.utils import Param, Config
 
 from auto_yolo.models.baseline import tf_find_connected_components
-from auto_yolo.models.core import AP
+from auto_yolo.models.core import AP, Updater, Evaluator
 
 from spair_video.core import VideoNetwork, coords_to_pixel_space, MOTMetrics
 
@@ -24,8 +24,7 @@ class BaselineAP(AP):
         y, x, height, width = np.split(tensors['normalized_box'], 4, axis=-1)
 
         image_shape = (updater.network.image_height, updater.network.image_width)
-        anchor_box = updater.network.anchor_box
-        top, left, height, width = coords_to_pixel_space(y, x, height, width, image_shape, anchor_box, top_left=True)
+        top, left, height, width = coords_to_pixel_space(y, x, height, width, image_shape, image_shape, top_left=True)
 
         batch_size = obj.shape[0]
         n_frames = getattr(updater.network, 'n_frames', 0)
@@ -68,8 +67,7 @@ class BaselineMOTMetrics(MOTMetrics):
 
         y, x, height, width = np.split(tensors['normalized_box'], 4, axis=-1)
         image_shape = (updater.network.image_height, updater.network.image_width)
-        anchor_box = updater.network.anchor_box
-        top, left, height, width = coords_to_pixel_space(y, x, height, width, image_shape, anchor_box, top_left=True)
+        top, left, height, width = coords_to_pixel_space(y, x, height, width, image_shape, image_shape, top_left=True)
 
         top = top.reshape(shape)
         left = left.reshape(shape)
@@ -171,8 +169,9 @@ class Baseline_RenderHook(RenderHook):
 
         B, T, image_height, image_width, _ = fetched.inp.shape
         yt, xt, ys, xs = np.split(fetched.normalized_box, 4, axis=-1)
+        image_shape = (image_height, image_width)
         pixel_space_box = coords_to_pixel_space(
-            yt, xt, ys, xs, (image_height, image_width), updater.network.anchor_box, top_left=True)
+            yt, xt, ys, xs, image_shape, image_shape, top_left=True)
         fetched.pixel_space_box = np.concatenate(pixel_space_box, axis=-1)
 
         lw = 0.1
@@ -215,7 +214,7 @@ class Baseline_RenderHook(RenderHook):
                         (left, top), width, height, linewidth=lw, edgecolor=gt_color, facecolor='none')
                     ax.add_patch(rect)
 
-        self.savefig('boxes', fig, updater, is_dir=False)
+        self.savefig('boxes_{}'.format(updater.n_updates), fig, updater, is_dir=False)
 
 
 class BaselineTracker(VideoNetwork):
@@ -275,5 +274,19 @@ class BaselineTracker(VideoNetwork):
             self.record_tensors(
                 count_1norm_relative=count_1norm_relative,
                 count_1norm=count_1norm,
-                count_error=count_1norm > 0.5
+                count_error=count_1norm > 0.5,
+                n_objects_per_frame=self._tensors["n_objects"],
             )
+
+# vvv To speed up evaluation for bad parameter settings.
+
+
+class BaselineEvaluator(Evaluator):
+    def _check_continue(self, record):
+        return record['n_objects_per_frame'] < 40
+
+
+class BaselineUpdater(Updater):
+    def _build_graph(self):
+        super()._build_graph()
+        self.evaluator = BaselineEvaluator(self.evaluator._functions, self.evaluator._tensors, self)

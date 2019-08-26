@@ -28,7 +28,10 @@ for stage_idx, stage_data in val_data.groupby('stage_idx'):
 
         best_value = metric_data[best_idx]
         best_threshold = stage_data.cc_threshold[best_idx]
+        best_cc_threshold = stage_data.cc_threshold[best_idx]
+        best_cosine_threshold = stage_data.cosine_threshold[best_idx]
 
-        best[metric].append(dict(idx=best_idx, value=best_value, threshold=best_threshold))
+        best[metric].append(dict(cc_threshold=best_cc_threshold, cosine_threshold=best_cosine_threshold))
+        # best[metric].append(dict(idx=best_idx, value=best_value, threshold=best_threshold))
 
 pprint.pprint(best)
