@@ -217,9 +217,20 @@ def _plot_mnist(prior):
         for (title, kind, max_train_digits), dset in data_sets.items():
             label = tex("{} - trained on 1--{} digits".format(title, max_train_digits))
             x, y, *yerr = dset[measure]
-            ax.errorbar(x, y, yerr=yerr, label=label)
 
-        ax.plot(*baseline_data[measure], label=baseline_name, ls='--')
+            ls = '-'
+
+            if cfg.fill:
+                line = ax.plot(x, y, label=label, ls=ls)
+                c = line[0].get_c()
+                yu = y + yerr[0]
+                yl = y - yerr[1]
+                ax.fill_between(x, yl, yu, color=c, alpha=0.25)
+            else:
+                ax.errorbar(x, y, yerr=yerr, label=label, ls=ls)
+
+        if baseline_data is not None:
+            ax.plot(*baseline_data[measure], label=baseline_name, ls='--', c='0.5')
 
         fontsize = 12
         labelsize = None
@@ -303,24 +314,20 @@ def plot_shapes_prior():
 def _plot_shapes(prior):
     eval_dir = os.path.join(data_dir, 'shapes/eval')
 
-    if 0:
-        data_paths = {
-            ('SILOT', 'silot', 10, True): ['run_env=big-shapes_max-shapes=10_small=True_alg=shapes-silot_duration=long_2019_08_19_17_30_03_seed=0'],
-            ('SILOT', 'silot', 20, True): ['run_env=big-shapes_max-shapes=20_small=True_alg=shapes-silot_duration=long_2019_08_24_14_26_42_seed=0'],
-            ('SILOT', 'silot', 30, True): ['run_env=big-shapes_max-shapes=30_small=True_alg=shapes-silot_duration=long_2019_08_13_00_01_35_seed=0'],
-        }
-    else:
-        data_paths = {
-            ('SILOT', 'silot', 10, False): [
-                # 'run_env=big-shapes_max-shapes=10_small=False_alg=shapes-silot_duration=long_2019_08_13_00_00_51_seed=0',
-                'run_env=big-shapes_max-shapes=10_small=False_alg=shapes-silot_duration=long_restart_2019_08_24_14_26_55_seed=0',
-            ],
-            ('SILOT', 'silot', 20, False): [
-                # 'run_env=big-shapes_max-shapes=20_small=False_alg=shapes-silot_duration=long_2019_08_19_17_30_18_seed=0',
-                'run_env=big-shapes_max-shapes=20_small=False_alg=shapes-silot_duration=long_restart_2019_08_24_14_27_08_seed=0',
-            ],
-            ('SILOT', 'silot', 30, False): ['run_env=big-shapes_max-shapes=30_small=False_alg=shapes-silot_duration=long_2019_08_13_00_01_20_seed=0'],
-        }
+    data_paths = {
+        ('SILOT', 'silot', 10, True): ['run_env=big-shapes_max-shapes=10_small=True_alg=shapes-silot_duration=long_2019_08_19_17_30_03_seed=0'],
+        # ('SILOT', 'silot', 20, True): ['run_env=big-shapes_max-shapes=20_small=True_alg=shapes-silot_duration=long_2019_08_24_14_26_42_seed=0'],
+        ('SILOT', 'silot', 30, True): ['run_env=big-shapes_max-shapes=30_small=True_alg=shapes-silot_duration=long_2019_08_13_00_01_35_seed=0'],
+        ('SILOT', 'silot', 10, False): [
+            'run_env=big-shapes_max-shapes=10_small=False_alg=shapes-silot_duration=long_2019_08_13_00_00_51_seed=0',
+            'run_env=big-shapes_max-shapes=10_small=False_alg=shapes-silot_duration=long_restart_2019_08_24_14_26_55_seed=0',
+        ],
+        # ('SILOT', 'silot', 20, False): [
+        #     # 'run_env=big-shapes_max-shapes=20_small=False_alg=shapes-silot_duration=long_2019_08_19_17_30_18_seed=0',
+        #     'run_env=big-shapes_max-shapes=20_small=False_alg=shapes-silot_duration=long_restart_2019_08_24_14_27_08_seed=0',
+        # ],
+        ('SILOT', 'silot', 30, False): ['run_env=big-shapes_max-shapes=30_small=False_alg=shapes-silot_duration=long_2019_08_13_00_01_20_seed=0'],
+    }
 
     data_paths = {
         k: [os.path.join(eval_dir, d) for d in v]
@@ -367,11 +374,12 @@ def _plot_shapes(prior):
 
     for (measure, axp), ax in zip(ax_params.items(), axes):
         for (title, kind, max_train_shapes, small), dset in data_sets.items():
-            size = "Small" if small else "Big"
-            # ls = '--' if small else '-'
-            ls = '-'
-            label = tex("{} - trained on {}--{} shapes".format(size, max_train_shapes-9, max_train_shapes,))
+            size = "cropped" if small else "full"
+            label = tex("Trained on {} images, {}--{} shapes".format(size, max_train_shapes-9, max_train_shapes,))
+
             x, y, *yerr = dset[measure]
+            ls = ':' if small else '-'
+            # ls = '-'
 
             if cfg.fill:
                 line = ax.plot(x, y, label=label, ls=ls)
@@ -383,7 +391,7 @@ def _plot_shapes(prior):
                 ax.errorbar(x, y, yerr=yerr, label=label, ls=ls)
 
         if baseline_data is not None:
-            ax.plot(*baseline_data[measure], label=baseline_name, ls='--')
+            ax.plot(*baseline_data[measure], label=baseline_name, ls='--', c='0.5')
 
         fontsize = 12
         labelsize = None
