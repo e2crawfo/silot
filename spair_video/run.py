@@ -62,14 +62,32 @@ class AtariEnv(Environment):
     def __init__(self):
         train_seed, val_seed, test_seed = 0, 1, 2
 
+        train_end = cfg.n_episodes - 2*cfg.n_val_episodes
+        val_end = cfg.n_episodes - cfg.n_val_episodes
+
+        if not cfg.do_train:
+            train_end = 1
+
+        train_episode_range = (None, train_end)
+        val_episode_range = (train_end, val_end)
+        test_episode_range = (val_end, None)
+
+        get_annotations = not cfg.do_train
+
         train = AtariVideoDataset(
-            max_examples=int(cfg.n_train), shuffle=True, seed=train_seed, episode_range=cfg.train_episode_range)
+            max_examples=int(cfg.n_train), shuffle=True, seed=train_seed,
+            episode_range=train_episode_range, get_annotations=False,
+            sample_density=cfg.train_sample_density)
 
         val = AtariVideoDataset(
-            max_examples=int(cfg.n_val), shuffle=True, seed=val_seed, episode_range=cfg.val_episode_range)
+            max_examples=int(cfg.n_val), shuffle=True, seed=val_seed,
+            episode_range=val_episode_range, get_annotations=get_annotations,
+            sample_density=cfg.val_sample_density)
 
         test = AtariVideoDataset(
-            max_examples=int(cfg.n_val), shuffle=True, seed=test_seed, episode_range=cfg.test_episode_range)
+            max_examples=int(cfg.n_val), shuffle=True, seed=test_seed,
+            episode_range=test_episode_range, get_annotations=get_annotations,
+            sample_density=cfg.val_sample_density)
 
         self.datasets = dict(train=train, val=val, test=test)
 
@@ -125,6 +143,7 @@ basic_config = DEFAULT_CONFIG.copy(
 
     annotation_scheme="correct",
     warning_mode="ignore",
+    simple_obj_kl=False,
 )
 
 
@@ -281,99 +300,62 @@ atari_train_config = Config(
     background_cfg=dict(mode="colour", colour="black"),
 
     image_shape=None,
-    anchor_box=(36, 36),
+    anchor_box=(30, 30),
     tile_shape=(72, 72),
     postprocessing="random",
-    object_shape=(14, 14),
+    object_shape=(21, 21),
 
     n_frames=8,
     after_warp=False,
     max_episodes=None,
-    max_samples_per_ep=1000,
+    train_sample_density=0.5,
+    val_sample_density=0.05,
     n_samples_per_image=8,
     frame_skip=1,
+    n_dilate=1,
+    n_erode=0,
+    filter_size=2,
+    allowed_colors_for_annotations=None,
+    distance_threshold=10000,
+    distance_ord=2,
+    average_frames=False,
+    crop=None,
+    n_val_episodes=5,
 )
+
+# Maybe these three are enough?
 
 # --- SPACE INVADERS ---
 
-env_configs["space_invaders_train"] = atari_train_config.copy(
+env_configs["space_invaders"] = atari_train_config.copy(
     atari_game="SpaceInvaders",
+    n_episodes=37,
+    crop=(0, 195, 0, 160),
 
-    train_episode_range=(None, 30),
-    val_episode_range=(30, 32),
-    test_episode_range=(32, 34),
-
-    frame_skip=2,
-)
-
-# --- ASTEROIDS ---
-
-env_configs["asteroids_train"] = atari_train_config.copy(
-    atari_game="Asteroids",
-    train_episode_range=(None, 30),
-    val_episode_range=(30, 32),
-    test_episode_range=(32, 34),
-
-)
-
-# --- CENTIPEDE ---
-
-env_configs["centipede_train"] = atari_train_config.copy(
-    atari_game="Centipede",
-    train_episode_range=(None, 55),
-    val_episode_range=(55, 60),
-    test_episode_range=(60, None),
-)
-
-# --- WIZARD OF WOR ---
-
-env_configs["wizard_of_wor_train"] = atari_train_config.copy(
-    atari_game="WizardOfWor",
-    train_episode_range=(None, 20),
-    val_episode_range=(20, 22),
-    test_episode_range=(22, 24),
+    anchor_box=(24, 24),
 )
 
 # --- CARNIVAL ---
 
-env_configs["carnival_train"] = atari_train_config.copy(
+env_configs["carnival"] = atari_train_config.copy(
     atari_game="Carnival",
-    train_episode_range=(None, 30),
-    val_episode_range=(30, 32),
-    test_episode_range=(32, 34),
+    n_episodes=50,
+    crop=(30, 215, 0, 160),
 )
 
-# --- VENTURE ---
+# --- ASTEROIDS ---
 
-env_configs["venture_train"] = atari_train_config.copy(
-    atari_game="Venture",
-    train_episode_range=(None, 30),
-    val_episode_range=(30, 32),
-    test_episode_range=(32, 34),
-)
-
-# --- ASSAULT ---
-
-env_configs["assault_train"] = atari_train_config.copy(
-    atari_game="Assault",
-    train_episode_range=(None, 30),
-    val_episode_range=(30, 32),
-    test_episode_range=(32, 34),
+env_configs["asteroids"] = atari_train_config.copy(
+    atari_game="Asteroids",
+    n_episodes=80,
+    crop=None,
 )
 
 # --- PONG ---
 
-env_configs["pong_train"] = atari_train_config.copy(
+env_configs["pong"] = atari_train_config.copy(
+    # Has a brown background...
     atari_game="Pong",
-    train_episode_range=(None, 30),
-    val_episode_range=(30, 32),
-    test_episode_range=(32, 34),
-)
-
-# --- BERZERK ---
-
-env_configs["berzerk_train"] = atari_train_config.copy(
-    atari_game="Berzerk",
     train_episode_range=(None, 30),
     val_episode_range=(30, 32),
     test_episode_range=(32, 34),
@@ -381,8 +363,18 @@ env_configs["berzerk_train"] = atari_train_config.copy(
 
 # --- DEMON ATTACK ---
 
-env_configs["demon_attack_train"] = atari_train_config.copy(
+env_configs["demon_attack"] = atari_train_config.copy(
+    # Object are multicolored, makes everything hard.
     atari_game="DemonAttack",
+    n_episodes=30,
+    crop=(0, 190, 0, 160),
+)
+
+# --- ASSAULT ---
+
+env_configs["assault"] = atari_train_config.copy(
+    # Object are multicolored, makes everything hard.
+    atari_game="Assault",
     train_episode_range=(None, 30),
     val_episode_range=(30, 32),
     test_episode_range=(32, 34),
@@ -390,8 +382,44 @@ env_configs["demon_attack_train"] = atari_train_config.copy(
 
 # --- PHOENIX ---
 
-env_configs["phoenix_train"] = atari_train_config.copy(
+env_configs["phoenix"] = atari_train_config.copy(
+    # Object are multicolored, makes everything hard. Also has white screens sometimes.
     atari_game="Phoenix",
+    train_episode_range=(None, 30),
+    val_episode_range=(30, 32),
+    test_episode_range=(32, 34),
+)
+
+
+# --- CENTIPEDE ---
+
+env_configs["centipede"] = atari_train_config.copy(
+    atari_game="Centipede",
+    n_episodes=60,
+)
+
+# --- WIZARD OF WOR ---
+
+env_configs["wizard_of_wor"] = atari_train_config.copy(
+    atari_game="WizardOfWor",
+    train_episode_range=(None, 20),
+    val_episode_range=(20, 22),
+    test_episode_range=(22, 24),
+)
+
+# --- VENTURE ---
+
+env_configs["venture"] = atari_train_config.copy(
+    atari_game="Venture",
+    train_episode_range=(None, 30),
+    val_episode_range=(30, 32),
+    test_episode_range=(32, 34),
+)
+
+# --- BERZERK ---
+
+env_configs["berzerk"] = atari_train_config.copy(
+    atari_game="Berzerk",
     train_episode_range=(None, 30),
     val_episode_range=(30, 32),
     test_episode_range=(32, 34),
@@ -400,7 +428,7 @@ env_configs["phoenix_train"] = atari_train_config.copy(
 # --- AIR RAID ---
 # (blue background)
 
-env_configs["air_raid_train"] = atari_train_config.copy(
+env_configs["air_raid"] = atari_train_config.copy(
     atari_game="AirRaid",
     train_episode_range=(None, 30),
     val_episode_range=(30, 32),
@@ -732,12 +760,12 @@ alg_configs["atari_train_silot"] = alg_configs["conv_silot"].copy(
     stage_steps=20000,
     patience_start=100000,
     patience=20000,
-    render_first=True,
+    render_first=False,
     plot_prior=False,
     final_count_prior_log_odds=0.0125,
     n_prop_objects=36,
     eval_noisy=False,
-    render_threshold=0.05,
+    render_threshold=0.05,  # render threshold now just affects boxes during plotting
     build_object_encoder=lambda scope: MLP(n_units=[512, 256], scope=scope),
     build_object_decoder=lambda scope: MLP(n_units=[256, 512], scope=scope),
 )
@@ -750,9 +778,6 @@ alg_configs["atari_eval_silot"] = alg_configs["atari_train_silot"].copy(
     n_prop_objects=128,
     n_frames=16,
     batch_size=16,
-    train_episode_range=(None, 1),
-    val_episode_range=(1, None),
-    test_episode_range=(1, None),
     plot_prior=True,
     render_first=True,
     render_final=False,

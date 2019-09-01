@@ -503,10 +503,7 @@ class ObjectPropagationLayer(ObjectLayer):
         d_obj = tf.nn.sigmoid(d_obj_pre_sigmoid)
 
         new_obj = objects.obj * d_obj
-        new_render_obj = (
-            self.float_is_training * new_obj
-            + (1 - self.float_is_training) * tf.round(new_obj + 0.5 - self.render_threshold)
-        )
+        new_render_obj = new_obj
 
         new_objects.update(
             d_obj_log_odds=d_obj_log_odds,
@@ -819,10 +816,7 @@ class SQAIRPropagationLayer(ObjectPropagationLayer):
         d_obj = tf.nn.sigmoid(d_obj_pre_sigmoid)
 
         new_obj = objects.obj * d_obj
-        new_render_obj = (
-            self.float_is_training * new_obj
-            + (1 - self.float_is_training) * tf.round(new_obj + 0.5 - self.render_threshold)
-        )
+        new_render_obj = new_obj
 
         new_objects.update(
             d_obj_log_odds=d_obj_log_odds,

@@ -156,6 +156,7 @@ class SILOT(VideoNetwork):
     use_sqair_prop = Param()
     conv_discovery = Param()
     use_abs_posn = Param()
+    simple_obj_kl = Param()
 
     disc_layer = None
     disc_feature_extractor = None
@@ -353,7 +354,7 @@ class SILOT(VideoNetwork):
                 [post_prop_objects["d_" + name], post_disc_objects[name]], axis=1)
         obj_for_kl['obj'] = tf.concat([post_prop_objects['obj'], post_disc_objects['obj']], axis=1)
 
-        indep_prior_obj_kl = self.disc_layer._compute_obj_kl(obj_for_kl)
+        indep_prior_obj_kl = self.disc_layer._compute_obj_kl(obj_for_kl, simple=self.simple_obj_kl)
 
         _tensors = AttrDict(
             post=AttrDict(
@@ -455,8 +456,8 @@ class SILOT(VideoNetwork):
 
         # centers of the grid cells in normalized (anchor box) space.
 
-        y = (np.arange(H, dtype='f') + 0.5) / H * (self.image_height / self.anchor_box[0])
-        x = (np.arange(W, dtype='f') + 0.5) / W * (self.image_width / self.anchor_box[1])
+        y = (np.arange(H, dtype='f') + 0.5) * self.pixels_per_cell[0] / self.anchor_box[0]
+        x = (np.arange(W, dtype='f') + 0.5) * self.pixels_per_cell[1] / self.anchor_box[1]
         x, y = np.meshgrid(x, y)
         self.grid_cell_centers = tf.constant(np.concatenate([y.flatten()[:, None], x.flatten()[:, None]], axis=1))
 
@@ -1175,12 +1176,12 @@ class SimpleSILOT_RenderHook(SILOT_RenderHook):
                     else:
                         color = self.propagation_color
 
-                    if o > 0.0:
+                    if o > cfg.render_threshold:
                         rect = patches.Rectangle(
                             (left, top), width, height, linewidth=lw, edgecolor=color, facecolor='none')
                         ax_inp.add_patch(rect)
 
-                    if o > 0.0:
+                    if o > cfg.render_threshold:
                         rect = patches.Rectangle(
                             (left, top), width, height, linewidth=lw, edgecolor=color, facecolor='none')
                         ax_outp.add_patch(rect)
@@ -1242,20 +1243,23 @@ class PaperSILOT_RenderHook(SILOT_RenderHook):
         W = updater.network.W
 
         obj = fetched.post.select.obj
+        render_obj = fetched.post.select.render_obj
         is_new = fetched.post.select.is_new
         threshold = updater.network.prop_layer.render_threshold
         tracking_ids = get_object_ids(obj, is_new, threshold, on_only=False)
+        n_prop_objects = updater.network.prop_layer.n_prop_objects
+        n_cells = int(np.sqrt(n_prop_objects))
 
         fig_unit_size = 0.5
-
         fig_width = T * W
-        n_prop_objects = updater.network.prop_layer.n_prop_objects
-        n_prop_rows = int(np.ceil(n_prop_objects / W))
-        fig_height = 3 * n_prop_rows
 
-        colors = list(plt.get_cmap('Set3').colors)
+        colors = list(plt.get_cmap('Dark2').colors)
+        # colors = list(plt.get_cmap('Set3').colors)
 
         for idx in range(N):
+            n_visible_objects = int(render_obj[idx].sum((1, 2)).max())
+            n_prop_rows = int(np.ceil(n_visible_objects / W))
+            fig_height = 2 * n_prop_objects + n_visible_objects
 
             # --- set up figure and axes ---
 
@@ -1263,19 +1267,21 @@ class PaperSILOT_RenderHook(SILOT_RenderHook):
 
             gs = gridspec.GridSpec(fig_height, fig_width, figure=fig)
 
-            ground_truth_axes = [fig.add_subplot(gs[0:n_prop_rows, t*W:(t+1)*W]) for t in range(T)]
+            ground_truth_axes = [fig.add_subplot(gs[0:n_cells, t*W:(t+1)*W]) for t in range(T)]
             gta = ground_truth_axes[0]
             gta.text(-0.1, 0.5, 'input', transform=gta.transAxes, ha='center', va='center', rotation=90)
 
-            dummy_axis = fig.add_subplot(gs[n_prop_rows:2*n_prop_rows, :W])
+            dummy_axis = fig.add_subplot(gs[n_cells:n_cells + n_prop_rows, :W])
             dummy_axis.set_axis_off()
             dummy_axis.text(-0.1, 0.5, 'objects', transform=dummy_axis.transAxes, ha='center', va='center', rotation=90)
 
             grid_axes = np.array([
-                [fig.add_subplot(gs[n_prop_rows+i, t*W+j]) for i, j in itertools.product(range(n_prop_rows), range(W))]
+                [fig.add_subplot(gs[n_cells+i, t*W+j]) for i, j in itertools.product(range(n_prop_rows), range(W))]
                 for t in range(T)])
 
-            reconstruction_axes = [fig.add_subplot(gs[2*n_prop_rows:3*n_prop_rows, t*W:(t+1)*W]) for t in range(T)]
+            reconstruction_axes = [
+                fig.add_subplot(gs[n_cells + n_prop_rows:2*n_cells + n_prop_rows, t*W:(t+1)*W])
+                for t in range(T)]
             ra = reconstruction_axes[0]
             ra.text(-0.1, 0.5, 'reconstruction', transform=ra.transAxes, ha='center', va='center', rotation=90)
 
