@@ -8,6 +8,7 @@ import shutil
 import os
 import sonnet as snt
 import itertools
+from tensorflow.python.util import nest
 
 import matplotlib.pyplot as plt
 from matplotlib import animation
@@ -16,7 +17,7 @@ import matplotlib.patches as patches
 from matplotlib.colors import to_rgb
 
 from dps import cfg
-from dps.utils import Param, map_structure, Config
+from dps.utils import Param, map_structure, Config, execute_command, cd
 from dps.utils.tf import RenderHook, tf_mean_sum, tf_shape, MLP
 from dps.utils.tensor_arrays import apply_keys, append_to_tensor_arrays, make_tensor_arrays
 
@@ -115,7 +116,7 @@ def select_top_k_objects(prop, disc):
 
     selected_objects.update(
         pred_n_objects=tf.reduce_sum(selected_objects.obj, axis=(1, 2)),
-        pred_n_objects_hard=tf.reduce_sum(tf.round(selected_objects.render_obj), axis=(1, 2)),
+        pred_n_objects_hard=tf.reduce_sum(tf.round(selected_objects.obj), axis=(1, 2)),
         final_weights=tf.one_hot(top_k_indices, n_prop_objects + n_disc_objects, axis=-1),
         is_new=is_new,
     )
@@ -321,7 +322,6 @@ class SILOT(VideoNetwork):
         disc_mask = disc_mask[:, None, None]
 
         post_disc_objects.obj = disc_mask * post_disc_objects.obj
-        post_disc_objects.render_obj = disc_mask * post_disc_objects.render_obj
 
         disc_objects = post_disc_objects
 
@@ -384,6 +384,9 @@ class SILOT(VideoNetwork):
             _tensors.update(prop_learned_prior_kl=prop_learned_prior_kl)
 
         return _tensors
+
+    def build_initial_object_feed_dict(self, objects):
+        return {v: objects[k] for k, v in self.initial_objects.items()}
 
     def build_representation(self):
         # --- init modules ---
@@ -461,7 +464,7 @@ class SILOT(VideoNetwork):
         x, y = np.meshgrid(x, y)
         self.grid_cell_centers = tf.constant(np.concatenate([y.flatten()[:, None], x.flatten()[:, None]], axis=1))
 
-        objects = self.prop_layer.null_object_set(self.batch_size)
+        self.initial_objects = objects = self.prop_layer.null_object_set(self.batch_size)
 
         f = tf.constant(0, dtype=tf.int32)
         structure = self._inner_loop_body(f, objects)
@@ -621,7 +624,7 @@ class SILOT_RenderHook(RenderHook):
         if updater.network.use_sqair_prop:
             prop_names.extend(['glimpse_prime_mask', 'glimpse_mask'])
 
-        disc_names = "obj render_obj z appearance normalized_box glimpse".split()
+        disc_names = "obj z appearance normalized_box glimpse".split()
         select_names = "obj z normalized_box final_weights yt xt ys xs".split()
         render_names = "output".split()
 
@@ -852,7 +855,6 @@ class SILOT_RenderHook(RenderHook):
 
                     for h, w, b in product(range(H), range(W), range(B)):
                         obj = _fetched.disc.obj[idx, t, obj_idx, 0]
-                        render_obj = _fetched.disc.render_obj[idx, t, obj_idx, 0]
                         z = _fetched.disc.z[idx, t, obj_idx, 0]
 
                         ax = disc_axes[h * B + b, M * w]
@@ -878,7 +880,7 @@ class SILOT_RenderHook(RenderHook):
                         yt, xt, ys, xs = _fetched.disc.normalized_box[idx, t, obj_idx]
 
                         nbox = "bx={:.2f},{:.2f},{:.2f},{:.2f}".format(yt, xt, ys, xs)
-                        ax.set_title(flt(nbox, obj=obj, robj=render_obj, z=z, final_weight=fw))
+                        ax.set_title(flt(nbox, obj=obj, z=z, final_weight=fw))
 
                         ax = disc_axes[h * B + b, M * w + 2]
                         self.imshow(ax, _fetched.disc.appearance[idx, t, obj_idx, :, :, 3], cmap="gray")
@@ -1106,7 +1108,7 @@ class SimpleSILOT_RenderHook(SILOT_RenderHook):
     propagation_color = np.array(to_rgb("xkcd:azure"))
 
     def build_fetches(self, updater):
-        select_names = "is_new render_obj normalized_box".split()
+        select_names = "is_new obj normalized_box".split()
         _fetches = Config(
             post=Config(
                 select=Config(**{n: 0 for n in select_names}),
@@ -1167,7 +1169,7 @@ class SimpleSILOT_RenderHook(SILOT_RenderHook):
 
                 flat_box = fetched.post.select.pixel_space_box[idx, t].reshape(-1, 4)
                 flat_is_new = fetched.post.select.is_new[idx, t].flatten()
-                flat_obj = fetched.post.select.render_obj[idx, t].flatten()
+                flat_obj = fetched.post.select.obj[idx, t].flatten()
 
                 # Plot proposed bounding boxes
                 for o, is_new, (top, left, height, width) in zip(flat_obj, flat_is_new, flat_box):
@@ -1176,12 +1178,12 @@ class SimpleSILOT_RenderHook(SILOT_RenderHook):
                     else:
                         color = self.propagation_color
 
-                    if o > cfg.render_threshold:
+                    if o > cfg.obj_threshold:
                         rect = patches.Rectangle(
                             (left, top), width, height, linewidth=lw, edgecolor=color, facecolor='none')
                         ax_inp.add_patch(rect)
 
-                    if o > cfg.render_threshold:
+                    if o > cfg.obj_threshold:
                         rect = patches.Rectangle(
                             (left, top), width, height, linewidth=lw, edgecolor=color, facecolor='none')
                         ax_outp.add_patch(rect)
@@ -1209,7 +1211,7 @@ class PaperSILOT_RenderHook(SILOT_RenderHook):
     N = 16
 
     def build_fetches(self, updater):
-        select_names = "is_new obj render_obj z appearance normalized_box".split()
+        select_names = "is_new obj z appearance normalized_box".split()
         render_names = "output".split()
 
         _fetches = Config(
@@ -1240,26 +1242,25 @@ class PaperSILOT_RenderHook(SILOT_RenderHook):
 
     def _plot(self, updater, fetched, post):
         N, T, image_height, image_width, _ = fetched['inp'].shape
-        W = updater.network.W
 
         obj = fetched.post.select.obj
-        render_obj = fetched.post.select.render_obj
         is_new = fetched.post.select.is_new
-        threshold = updater.network.prop_layer.render_threshold
+        threshold = cfg.obj_threshold
         tracking_ids = get_object_ids(obj, is_new, threshold, on_only=False)
         n_prop_objects = updater.network.prop_layer.n_prop_objects
         n_cells = int(np.sqrt(n_prop_objects))
 
         fig_unit_size = 0.5
-        fig_width = T * W
+        fig_width = T * n_cells
 
         colors = list(plt.get_cmap('Dark2').colors)
         # colors = list(plt.get_cmap('Set3').colors)
 
         for idx in range(N):
-            n_visible_objects = int(render_obj[idx].sum((1, 2)).max())
-            n_prop_rows = int(np.ceil(n_visible_objects / W))
-            fig_height = 2 * n_prop_objects + n_visible_objects
+            n_visible_objects = int((obj[idx] > threshold).sum((1, 2)).max())
+            n_visible_rows = int(np.ceil(n_visible_objects / n_cells))
+            fig_height = 2 * n_cells + n_visible_rows
+            # fig_height = 2 * n_prop_objects + n_visible_objects
 
             # --- set up figure and axes ---
 
@@ -1267,20 +1268,20 @@ class PaperSILOT_RenderHook(SILOT_RenderHook):
 
             gs = gridspec.GridSpec(fig_height, fig_width, figure=fig)
 
-            ground_truth_axes = [fig.add_subplot(gs[0:n_cells, t*W:(t+1)*W]) for t in range(T)]
+            ground_truth_axes = [fig.add_subplot(gs[0:n_cells, t*n_cells:(t+1)*n_cells]) for t in range(T)]
             gta = ground_truth_axes[0]
             gta.text(-0.1, 0.5, 'input', transform=gta.transAxes, ha='center', va='center', rotation=90)
 
-            dummy_axis = fig.add_subplot(gs[n_cells:n_cells + n_prop_rows, :W])
+            dummy_axis = fig.add_subplot(gs[n_cells:n_cells + n_visible_rows, :n_cells])
             dummy_axis.set_axis_off()
             dummy_axis.text(-0.1, 0.5, 'objects', transform=dummy_axis.transAxes, ha='center', va='center', rotation=90)
 
             grid_axes = np.array([
-                [fig.add_subplot(gs[n_cells+i, t*W+j]) for i, j in itertools.product(range(n_prop_rows), range(W))]
+                [fig.add_subplot(gs[n_cells+i, t*n_cells+j]) for i, j in itertools.product(range(n_visible_rows), range(n_cells))]
                 for t in range(T)])
 
             reconstruction_axes = [
-                fig.add_subplot(gs[n_cells + n_prop_rows:2*n_cells + n_prop_rows, t*W:(t+1)*W])
+                fig.add_subplot(gs[n_cells + n_visible_rows:2*n_cells + n_visible_rows, t*n_cells:(t+1)*n_cells])
                 for t in range(T)]
             ra = reconstruction_axes[0]
             ra.text(-0.1, 0.5, 'reconstruction', transform=ra.transAxes, ha='center', va='center', rotation=90)
@@ -1325,14 +1326,13 @@ class PaperSILOT_RenderHook(SILOT_RenderHook):
                     else:
                         ls = '--'
 
-                    tracking_id = tracking_ids[idx, t][i]
-
                     ax = grid_axes[t, axis_idx]
                     app = fetched.post.select.appearance[idx, t, i, :, :, :3]
                     alpha = fetched.post.select.appearance[idx, t, i, :, :, 3:]
                     masked_apperance = app * alpha
                     self.imshow(ax, masked_apperance)
 
+                    tracking_id = tracking_ids[idx, t][i]
                     color = colors[tracking_id % len(colors)]
                     rect = patches.Rectangle(
                         (0.0, 0.0), 1.0, 1.0, clip_on=False, linewidth=3, ls=ls,
@@ -1354,3 +1354,158 @@ class PaperSILOT_RenderHook(SILOT_RenderHook):
             plt.subplots_adjust(left=0.02, right=.98, top=.98, bottom=0.02, wspace=0.1, hspace=0.1)
             prefix = "post" if post else "prior"
             self.savefig("{}/{}".format(prefix, idx), fig, updater)
+
+
+class LongVideoSILOT_RenderHook(SILOT_RenderHook):
+    """ Render a long video.
+
+    Lets assume the datset uses some inherent batch size, equal to the number of parallel videos it contains.
+    Call this B. So the first B observations of the dataset are the first cfg.n_frames of each of the videos.
+
+    The next B observations are the next n_frames of the each of the videos, etc.
+
+    B should be the same as batch_size. n_batches should be a in the config. Assume that video is padded with 0 frames
+    when the videos stop.
+
+    """
+    linewidth = 4
+
+    def build_fetches(self, updater):
+        select_names = "is_new obj normalized_box".split()
+        _fetches = Config(
+            post=Config(
+                select=Config(**{n: 0 for n in select_names}),
+            ),
+        )
+        fetches = list(_fetches.keys())
+
+        fetches.extend("output inp background offset".split())
+        return fetches
+
+    def start_stage(self, training_loop, updater, stage_idx):
+        to_fetch = {'select': updater.network._tensors['selected_objects'].copy()}
+
+        try:
+            tensors = updater.tensors
+        except AttributeError:
+            tensors = updater._tensors
+        to_fetch['output'] = tensors['output']
+        to_fetch['inp'] = tensors['inp']
+        self.to_fetch = to_fetch
+
+    def __call__(self, updater):
+        fetched = self._fetch(updater, True)
+        self._plot(updater, fetched, True)
+
+        # if updater.network.learn_prior and cfg.plot_prior:
+        #     fetched = self._fetch(updater, False)
+        #     self._plot(updater, fetched, False)
+
+    def _fetch(self, updater, post):
+        sess = tf.get_default_session()
+
+        fetched = []
+        objects = None
+
+        feed_dict = self.get_feed_dict(updater)
+
+        for i in range(cfg.n_batches):
+            print("Working on batch {}".format(i))
+
+            if not post:
+                if objects:
+                    feed_dict[updater.network._prior_start_step] = 0
+                else:
+                    feed_dict[updater.network._prior_start_step] = updater.network.eval_prior_start_step
+
+            if objects:
+                object_feed_dict = updater.network.build_initial_object_feed_dict(objects)
+                feed_dict.update(object_feed_dict)
+
+            _fetched = sess.run(self.to_fetch, feed_dict=feed_dict)
+
+            objects = nest.map_structure(lambda s: s[:, -1], _fetched['select'])
+            fetched.append(Config(_fetched))
+
+        fetched = {
+            k: np.concatenate([d[k] for d in fetched], axis=1)
+            for k, v in fetched[0].items()
+        }
+
+        fetched = Config(fetched)
+
+        _, _, image_height, image_width, _ = fetched.inp.shape
+
+        yt, xt, ys, xs = np.split(fetched.select.normalized_box, 4, axis=-1)
+        pixel_space_box = coords_to_pixel_space(
+            yt, xt, ys, xs, (image_height, image_width), updater.network.anchor_box, top_left=True)
+        fetched.select.pixel_space_box = np.concatenate(pixel_space_box, axis=-1)
+
+        return fetched
+
+    def _plot(self, updater, fetched, post):
+        N, T, image_height, image_width, _ = fetched['inp'].shape
+        height_scale = image_height / image_width
+        lw = self.linewidth
+
+        obj = fetched.select.obj
+        is_new = fetched.select.is_new
+        tracking_ids = get_object_ids(obj, is_new, cfg.obj_threshold, on_only=False)
+        colors = list(plt.get_cmap('Dark2').colors)
+
+        for idx in range(N):
+            fig_unit_size = 10
+            figsize = (2*fig_unit_size, height_scale*fig_unit_size)
+            fig, axes = plt.subplots(1, 2, figsize=figsize)
+
+            for ax in axes.flatten():
+                ax.set_axis_off()
+
+            def func(t):
+                ax_inp = axes[0]
+                self.imshow(ax_inp, fetched['inp'][idx, t])
+
+                ax_outp = axes[1]
+                self.imshow(ax_outp, fetched['output'][idx, t])
+
+                flat_box = fetched.select.pixel_space_box[idx, t].reshape(-1, 4)
+                flat_is_new = fetched.select.is_new[idx, t].flatten()
+                flat_obj = fetched.select.obj[idx, t].flatten()
+                flat_tracking_ids = tracking_ids[idx, t]
+
+                # Plot proposed bounding boxes
+                for o, is_new, _id, (top, left, height, width) in zip(flat_obj, flat_is_new, flat_tracking_ids, flat_box):
+                    color = colors[_id % len(colors)]
+                    ls = '--' if is_new else '-'
+
+                    if o > cfg.obj_threshold:
+                        rect = patches.Rectangle(
+                            (left, top), width, height, linewidth=lw, edgecolor=color, facecolor='none', ls=ls)
+                        ax_inp.add_patch(rect)
+
+                    if o > cfg.obj_threshold:
+                        rect = patches.Rectangle(
+                            (left, top), width, height, linewidth=lw, edgecolor=color, facecolor='none', ls=ls)
+                        ax_outp.add_patch(rect)
+
+            plt.subplots_adjust(left=0.01, right=.99, top=.99, bottom=0.01, wspace=0.01, hspace=0.12)
+
+            anim = animation.FuncAnimation(fig, func, frames=T, interval=500)
+
+            prefix = "post" if post else "prior"
+
+            path = self.path_for('{}/{}'.format(prefix, idx), updater, ext="mp4")
+            anim.save(path, writer='ffmpeg', codec='hevc', extra_args=['-preset', 'ultrafast'], dpi=self.dpi)
+
+            plt.close(fig)
+
+            latest = os.path.join(os.path.dirname(path), 'latest_stage{:0>4}.mp4'.format(updater.stage_idx))
+            shutil.copyfile(path, latest)
+
+            to_gif_command = (
+                'ffmpeg  -i latest_stage0000.mp4 -vf "fps=10,scale=1000:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" '
+                '-loop 0 output.gif'
+            )
+
+            with cd(os.path.dirname(path)):
+                execute_command(to_gif_command, output="loud")

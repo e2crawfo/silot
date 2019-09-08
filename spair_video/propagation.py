@@ -101,13 +101,13 @@ class ObjectPropagationLayer(ObjectLayer):
             ys_logit=ys + 0.0,
             xs_logit=xs + 0.0,
 
-            d_yt=yt + 0.0,
-            d_xt=xt + 0.0,
-            d_ys=ys + 0.0,
-            d_xs=xs + 0.0,
+            # d_yt=yt + 0.0,
+            # d_xt=xt + 0.0,
+            # d_ys=ys + 0.0,
+            # d_xs=xs + 0.0,
+            # d_attr=new_objects.attr + 0.0,
+            # d_z=new_objects.z + 0.0,
 
-            d_attr=new_objects.attr + 0.0,
-            d_z=new_objects.z + 0.0,
             z_logit=new_objects.z + 0.0,
         )
 
@@ -503,7 +503,6 @@ class ObjectPropagationLayer(ObjectLayer):
         d_obj = tf.nn.sigmoid(d_obj_pre_sigmoid)
 
         new_obj = objects.obj * d_obj
-        new_render_obj = new_obj
 
         new_objects.update(
             d_obj_log_odds=d_obj_log_odds,
@@ -511,7 +510,6 @@ class ObjectPropagationLayer(ObjectLayer):
             d_obj_pre_sigmoid=d_obj_pre_sigmoid,
             d_obj=d_obj,
             obj=new_obj,
-            render_obj=new_render_obj,
         )
 
         # --- update each object's hidden state --
@@ -816,7 +814,6 @@ class SQAIRPropagationLayer(ObjectPropagationLayer):
         d_obj = tf.nn.sigmoid(d_obj_pre_sigmoid)
 
         new_obj = objects.obj * d_obj
-        new_render_obj = new_obj
 
         new_objects.update(
             d_obj_log_odds=d_obj_log_odds,
@@ -824,7 +821,6 @@ class SQAIRPropagationLayer(ObjectPropagationLayer):
             d_obj_pre_sigmoid=d_obj_pre_sigmoid,
             d_obj=d_obj,
             obj=new_obj,
-            render_obj=new_render_obj,
         )
 
         # --- update each object's hidden state --

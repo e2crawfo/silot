@@ -82,7 +82,7 @@ class MOTMetrics:
             for f in range(F):
                 _pred_ids = []
                 for i in range(n_objects):
-                    if obj[b, f, i] > 0.5:
+                    if obj[b, f, i] > cfg.obj_threshold:
                         if is_new[b, f, i]:
                             ids[i] = next_id
                             next_id += 1
@@ -117,7 +117,7 @@ class MOTMetrics:
                     pred_boxes = []
 
                     for i in range(int(pred_n_objects[b, f])):
-                        if obj[b, f, i] > 0.5:
+                        if obj[b, f, i] > cfg.obj_threshold:
                             pred_boxes.append([top[b, f, i], left[b, f, i], height[b, f, i], width[b, f, i]])
 
                     # Speed things up for really bad trackers

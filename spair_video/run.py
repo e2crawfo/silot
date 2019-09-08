@@ -6,9 +6,9 @@ import itertools
 from dps import cfg
 from dps.hyper import run_experiment
 from dps.utils import Config, copy_update
-from dps.datasets.base import VisualArithmeticDataset, Environment
-from dps.datasets.shapes import RandomShapesDataset
-from dps.datasets.atari import AtariVideoDataset
+from dps.datasets.base import VisualArithmeticDataset, LongVideoVisualArithmetic, Environment
+from dps.datasets.shapes import RandomShapesDataset, LongVideoRandomShapes
+from dps.datasets.atari import AtariVideoDataset, AtariLongVideoVideoDataset
 from dps.utils.tf import MLP, CompositeCell, GridConvNet, RecurrentGridConvNet, ConvNet, tf_shape, LookupSchedule
 from dps.config import DEFAULT_CONFIG
 
@@ -18,7 +18,8 @@ from spair_video.core import SimpleVideoVAE, SimpleVAE_RenderHook, BackgroundExt
 from spair_video.tba import TrackingByAnimation, TBA_Backbone, TBA_RenderHook
 from spair_video.seq_air import SQAIR, SQAIRUpdater, SQAIR_RenderHook
 from spair_video.sspair import SequentialSpair, SequentialSpair_RenderHook
-from spair_video.silot import SILOT, SILOT_RenderHook, SimpleSILOT_RenderHook, PaperSILOT_RenderHook
+from spair_video.silot import (
+    SILOT, SILOT_RenderHook, SimpleSILOT_RenderHook, PaperSILOT_RenderHook, LongVideoSILOT_RenderHook)
 from spair_video.background_only import BackgroundOnly, BackgroundOnly_RenderHook
 from spair_video.baseline import BaselineTracker, Baseline_RenderHook, BaselineUpdater
 
@@ -42,6 +43,22 @@ class MovingMNIST(Environment):
         self.datasets = dict(train=train, val=val, test=test)
 
 
+class MovingMNISTLongVideoEnv(Environment):
+    def __init__(self):
+        train_seed, val_seed, test_seed = 0, 1, 2
+
+        train = LongVideoVisualArithmetic(
+            shuffle=False, example_range=cfg.train_example_range, seed=train_seed)
+
+        val = LongVideoVisualArithmetic(
+            shuffle=False, example_range=cfg.val_example_range, seed=val_seed)
+
+        test = LongVideoVisualArithmetic(
+            shuffle=False, example_range=cfg.test_example_range, seed=test_seed)
+
+        self.datasets = dict(train=train, val=val, test=test)
+
+
 class MovingShapes(Environment):
     def __init__(self):
         train_seed, val_seed, test_seed = 0, 1, 2
@@ -58,6 +75,17 @@ class MovingShapes(Environment):
         self.datasets = dict(train=train, val=val, test=test)
 
 
+class MovingShapesLongVideoEnv(Environment):
+    def __init__(self):
+        train_seed, val_seed, test_seed = 0, 1, 2
+
+        train = LongVideoRandomShapes(shuffle=False, seed=train_seed)
+        val = LongVideoRandomShapes(shuffle=False, seed=val_seed)
+        test = LongVideoRandomShapes(shuffle=False, seed=test_seed)
+
+        self.datasets = dict(train=train, val=val, test=test)
+
+
 class AtariEnv(Environment):
     def __init__(self):
         train_seed, val_seed, test_seed = 0, 1, 2
@@ -65,10 +93,11 @@ class AtariEnv(Environment):
         train_end = cfg.n_episodes - 2*cfg.n_val_episodes
         val_end = cfg.n_episodes - cfg.n_val_episodes
 
-        if not cfg.do_train:
-            train_end = 1
+        if cfg.do_train:
+            train_episode_range = (None, train_end)
+        else:
+            train_episode_range = (None, 1)
 
-        train_episode_range = (None, train_end)
         val_episode_range = (train_end, val_end)
         test_episode_range = (val_end, None)
 
@@ -88,6 +117,34 @@ class AtariEnv(Environment):
             max_examples=int(cfg.n_val), shuffle=True, seed=test_seed,
             episode_range=test_episode_range, get_annotations=get_annotations,
             sample_density=cfg.val_sample_density)
+
+        self.datasets = dict(train=train, val=val, test=test)
+
+
+class AtariLongVideoEnv(Environment):
+    def __init__(self):
+        train_seed, val_seed, test_seed = 0, 1, 2
+
+        train_end = cfg.n_episodes - 2*cfg.n_val_episodes
+        val_end = cfg.n_episodes - cfg.n_val_episodes
+        train_end = cfg.n_val_episodes
+
+        if cfg.do_train:
+            train_episode_range = (None, train_end)
+        else:
+            train_episode_range = (None, 5)
+
+        val_episode_range = (train_end, val_end)
+        test_episode_range = (val_end, None)
+
+        train = AtariLongVideoVideoDataset(
+            shuffle=False, seed=train_seed, episode_range=train_episode_range,)
+
+        val = AtariLongVideoVideoDataset(
+            shuffle=False, seed=val_seed, episode_range=val_episode_range,)
+
+        test = AtariLongVideoVideoDataset(
+            shuffle=False, seed=test_seed, episode_range=test_episode_range,)
 
         self.datasets = dict(train=train, val=val, test=test)
 
@@ -323,8 +380,6 @@ atari_train_config = Config(
     n_val_episodes=5,
 )
 
-# Maybe these three are enough?
-
 # --- SPACE INVADERS ---
 
 env_configs["space_invaders"] = atari_train_config.copy(
@@ -401,10 +456,9 @@ env_configs["centipede"] = atari_train_config.copy(
 # --- WIZARD OF WOR ---
 
 env_configs["wizard_of_wor"] = atari_train_config.copy(
+    n_episodes=24,
+    n_val_episodes=5,
     atari_game="WizardOfWor",
-    train_episode_range=(None, 20),
-    val_episode_range=(20, 22),
-    test_episode_range=(22, 24),
 )
 
 # --- VENTURE ---
@@ -559,7 +613,7 @@ alg_configs['sspair'] = Config(
     alpha_logit_scale=0.1,
     alpha_logit_bias=5.0,
 
-    render_threshold=0.5,
+    obj_threshold=0.5,
 
     end_training_wheels=1000,
     count_prior_dist=None,
@@ -726,9 +780,23 @@ alg_configs["conv_silot_plot"] = alg_configs["conv_silot"].copy(
     n_frames=8,
     initial_n_frames=8,
     eval_noisy=False,
-    render_threshold=0.05,
     curriculum=[dict()],
     render_first=True,
+)
+
+alg_configs["mnist_long_video_silot"] = alg_configs["conv_silot_plot"].copy(
+    render_hook=LongVideoSILOT_RenderHook(),
+    build_env=MovingMNISTLongVideoEnv,
+    n_examples=10,
+    batch_size=10,
+    n_frames=100,
+    n_batches=1,
+    # There is something not quite working when I'm using n_batches > 1...
+    # but luckily I am able to run 100 frames without breaking it up at all.
+    # n_frames=100,
+    # n_batches=20,
+    shuffle_val=False,
+    obj_threshold=0.5,
 )
 
 alg_configs["shapes_silot"] = alg_configs["conv_silot"].copy(
@@ -746,12 +814,28 @@ alg_configs["shapes_eval_silot"] = alg_configs["shapes_silot"].copy(
     n_train=32,
     do_train=False,
     eval_noisy=False,
-    render_threshold=0.05,
+    obj_threshold=0.05,
     curriculum=[dict()],
     n_prop_objects=36,
     render_first=True,
     n_frames=8,
     initial_n_frames=8,
+)
+
+alg_configs["shapes_plot_silot"] = alg_configs["shapes_eval_silot"].copy(
+    render_hook=PaperSILOT_RenderHook(N=16),
+    render_first=True,
+)
+
+alg_configs["shapes_long_video_silot"] = alg_configs["shapes_eval_silot"].copy(
+    render_hook=LongVideoSILOT_RenderHook(),
+    build_env=MovingShapesLongVideoEnv,
+    n_examples=10,
+    batch_size=10,
+    n_frames=100,
+    n_batches=1,
+    shuffle_val=False,
+    obj_threshold=0.05,
 )
 
 alg_configs["atari_train_silot"] = alg_configs["conv_silot"].copy(
@@ -765,22 +849,39 @@ alg_configs["atari_train_silot"] = alg_configs["conv_silot"].copy(
     final_count_prior_log_odds=0.0125,
     n_prop_objects=36,
     eval_noisy=False,
-    render_threshold=0.05,  # render threshold now just affects boxes during plotting
+    obj_threshold=0.05,
     build_object_encoder=lambda scope: MLP(n_units=[512, 256], scope=scope),
     build_object_decoder=lambda scope: MLP(n_units=[256, 512], scope=scope),
 )
 
 alg_configs["atari_eval_silot"] = alg_configs["atari_train_silot"].copy(
-    render_hook=SimpleSILOT_RenderHook(),
+    render_hook=None,
     postprocessing="",
     do_train=False,
     curriculum=[dict()],
     n_prop_objects=128,
+    n_frames=8,
+    batch_size=8,
+    plot_prior=True,
+    render_first=False,
+    render_final=False,
+)
+
+alg_configs["atari_plot_silot"] = alg_configs["atari_eval_silot"].copy(
+    render_hook=SimpleSILOT_RenderHook(),
+    render_first=True,
     n_frames=16,
     batch_size=16,
-    plot_prior=True,
-    render_first=True,
-    render_final=False,
+)
+
+alg_configs["atari_long_video_silot"] = alg_configs["atari_plot_silot"].copy(
+    render_hook=LongVideoSILOT_RenderHook(),
+    build_env=AtariLongVideoEnv,
+    batch_size=5,
+    n_frames=4,
+    n_batches=20,
+    n_samples_per_episode=1,
+    shuffle_val=False,
 )
 
 alg_configs["test_silot"] = alg_configs["silot"].copy(
