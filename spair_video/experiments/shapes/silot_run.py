@@ -13,26 +13,37 @@ args, _ = parser.parse_known_args()
 readme = "Running SILOT experiment on shapes."
 
 run_kwargs = dict(
-    max_hosts=1, ppn=4, cpp=2, gpu_set="0,1", pmem=15000, project="rpp-bengioy",
+    max_hosts=1, ppn=4, cpp=4, gpu_set="0,1", pmem=5000, project="rpp-bengioy",
     wall_time="96hours", cleanup_time="5mins", slack_time="5mins", n_repeats=4,
-    copy_locally=True,
 )
 
 durations = dict(
     long=copy_update(run_kwargs),
-    restart=copy_update(
+    restart10=copy_update(
         run_kwargs, wall_time="75hours",
+        cpp=4, pmem=5000, ppn=1, n_repeats=1, gpu_set="0",
         config=dict(
-            restart_steps="0:135000 1:120000 2:135000 3:120000",
-            experiment_restart_path="/scratch/e2crawfo/dps_data/parallel_experiments_run/shapes-silot/run_env=big-shapes_max-shapes=30_alg=shapes-silot_duration=long_2019_08_01_07_44_41_seed=0/experiments",
+            seed=100,
+            restart_steps="1:120000",
+            experiment_restart_path="/scratch/e2crawfo/dps_data/parallel_experiments_run/aaai_2020_silot/shapes/run/run_env=big-shapes_max-shapes=10_alg=shapes-silot_duration=long_2019_07_30_16_55_21_seed=0/experiments",
+            prepare_func=silot_shapes_restart_prepare_func,
+        ),
+    ),
+    restart20=copy_update(
+        run_kwargs, wall_time="75hours",
+        cpp=4, pmem=5000, ppn=1, n_repeats=1, gpu_set="0",
+        config=dict(
+            seed=200,
+            restart_steps="2:120000",
+            experiment_restart_path="/scratch/e2crawfo/dps_data/parallel_experiments_run/aaai_2020_silot/shapes/run/run_env=big-shapes_max-shapes=20_alg=shapes-silot_duration=long_2019_08_01_07_44_22_seed=0/experiments",
             prepare_func=silot_shapes_restart_prepare_func,
         ),
     ),
     short=dict(
-        wall_time="180mins", gpu_set="0", ppn=2, n_repeats=2, distributions=None, pmem=15000,
+        wall_time="60mins", gpu_set="0", ppn=2, cpp=4, n_repeats=2, distributions=None, pmem=15000,
         config=dict(
             max_steps=3000, render_step=500, eval_step=500, display_step=100,
-            stage_steps=500, curriculum=[dict()]
+            stage_steps=500, curriculum=[dict()], backup_step=300,
         ),
     ),
     build=dict(
@@ -43,7 +54,6 @@ durations = dict(
         )
     ),
 )
-durations["restart_short"] = copy_update(durations["restart"], wall_time="120mins")
 
 config = basic_config.copy()
 if args.small:
