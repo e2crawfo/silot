@@ -208,14 +208,27 @@ def _plot_mnist(prior):
 
     fig_unit_size = 3
 
-    fig, axes = grid_subplots(1, n_measures, fig_unit_size)
+    if cfg.version == 1:
+        fig, axes = grid_subplots(1, n_measures+1, fig_unit_size)
+    else:
+        fig, axes = grid_subplots(1, n_measures, fig_unit_size)
     axes = axes.reshape(-1)
 
     data_sets = {key: get_mnist_data(path, measures, "ci95") for key, path in data_paths.items()}
 
+    tick_font_size = None
+    label_font_size = 12
+
+    if cfg.version == 1:
+        tick_font_size = 14
+        label_font_size = 14
+
     for (measure, axp), ax in zip(ax_params.items(), axes):
         for (title, kind, max_train_digits), dset in data_sets.items():
-            label = tex("{} - trained on 1--{} digits".format(title, max_train_digits))
+            if cfg.version == 1:
+                label = tex("{}, train 1--{} digits".format(title, max_train_digits))
+            else:
+                label = tex("{} - trained on 1--{} digits".format(title, max_train_digits))
             x, y, *yerr = dset[measure]
 
             ls = '-'
@@ -232,21 +245,105 @@ def _plot_mnist(prior):
         if baseline_data is not None:
             ax.plot(*baseline_data[measure], label=baseline_name, ls='--', c='0.5')
 
-        fontsize = 12
-        labelsize = None
-
-        ax.set_ylabel(axp['ylabel'], fontsize=fontsize)
-        ax.tick_params(axis='both', labelsize=labelsize)
-        ax.set_ylim(axp['ylim'])
-        ax.set_xlabel(xlabel, fontsize=fontsize)
+        ax.set_ylabel(axp['ylabel'], fontsize=label_font_size)
+        ax.set_xlabel(xlabel, fontsize=label_font_size)
         ax.set_xticks(xticks)
-
-    axes[0].legend(loc="lower left", fontsize=8)
-    plt.subplots_adjust(left=0.07, bottom=0.15, right=0.98, top=0.94, wspace=.24)
+        ax.tick_params(axis='both', labelsize=tick_font_size)
+        ax.set_ylim(axp['ylim'])
 
     name = "prior" if prior else "post"
 
-    plot_path = os.path.join(plot_dir, 'mnist', name + cfg.ext)
+    if cfg.version == 1:
+        axes[-1].set_axis_off()
+        axes[-2].legend(loc="center left", fontsize=12, bbox_to_anchor=(1.05, 0.5), borderaxespad=0.25)
+        plt.subplots_adjust(left=0.06, bottom=0.17, right=1.0, top=0.94, wspace=.32)
+        plot_path = os.path.join(plot_dir, 'mnist', name + '_version=1' + cfg.ext)
+    else:
+        axes[0].legend(loc="lower left", fontsize=8)
+        plt.subplots_adjust(left=0.07, bottom=0.15, right=0.98, top=0.94, wspace=.24)
+        plot_path = os.path.join(plot_dir, 'mnist', name + cfg.ext)
+
+    os.makedirs(os.path.dirname(plot_path), exist_ok=True)
+    fig.savefig(plot_path)
+
+
+def plot_mnist_small():
+    eval_dir = os.path.join(data_dir, 'mnist/eval')
+
+    data_paths = {
+        ('SILOT', 'silot', 12): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=12_alg=conv-silot_duration=long_2019_07_25_22_45_23_seed=0'),
+        ('SILOT', 'silot', 6): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=6_alg=conv-silot_duration=long_2019_07_25_22_45_08_seed=0'),
+
+        # ('SQAIR (conv)', 'conv_sqair', 12): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=12_alg=conv-sqair_duration=long_2019_07_30_11_35_31_seed=0'),
+        ('SQAIR (conv)', 'conv_sqair', 6): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=6_alg=conv-sqair_duration=long_2019_07_25_22_46_07_seed=0'),
+
+        # ('SQAIR (mlp)', 'sqair', 12): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=12_alg=sqair_duration=long_2019_07_25_22_45_53_seed=0'),
+        ('SQAIR (mlp)', 'sqair', 6): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=6_alg=sqair_duration=long_2019_07_25_22_45_38_seed=0'),
+    }
+
+    xlabel = '\# Digits in Test Image'
+    xticks = [0, 2, 4, 6, 8, 10, 12]
+
+    ax_params = OrderedDict({
+        "MOT:mota": dict(ylabel='MOTA', ylim=(-1.05, 1.05)),
+        "AP": dict(ylabel='AP', ylim=(-0.05, 1.05)),
+    })
+
+    baseline_data = {
+        'AP': get_mnist_baseline_data(os.path.join(eval_dir, 'exp_alg=mnist-baseline-AP_2019_08_07_14_34_43_seed=1113481622'), 'AP'),
+        'MOT:mota': get_mnist_baseline_data(os.path.join(eval_dir, 'exp_alg=mnist-baseline-mota_2019_08_07_14_44_38_seed=1470331190'), 'MOT:mota'),
+    }
+
+    baseline_name = 'ConnComp'
+
+    measures = list(ax_params.keys())
+    n_measures = len(measures)
+
+    fig_unit_size = 3
+
+    fig, axes = grid_subplots(1, n_measures, fig_unit_size)
+    axes = axes.reshape(-1)
+
+    data_sets = {key: get_mnist_data(path, measures, "ci95") for key, path in data_paths.items()}
+
+    tick_font_size = None
+    label_font_size = 12
+
+    if cfg.version == 1:
+        tick_font_size = 14
+        label_font_size = 14
+
+    for (measure, axp), ax in zip(ax_params.items(), axes):
+        for (title, kind, max_train_digits), dset in data_sets.items():
+            label = tex("{}, 1--{} digits".format(title, max_train_digits))
+            x, y, *yerr = dset[measure]
+
+            ls = '-'
+
+            if cfg.fill:
+                line = ax.plot(x, y, label=label, ls=ls)
+                c = line[0].get_c()
+                yu = y + yerr[0]
+                yl = y - yerr[1]
+                ax.fill_between(x, yl, yu, color=c, alpha=0.25)
+            else:
+                ax.errorbar(x, y, yerr=yerr, label=label, ls=ls)
+
+        if baseline_data is not None:
+            ax.plot(*baseline_data[measure], label=baseline_name, ls='--', c='0.5')
+
+        ax.set_ylabel(axp['ylabel'], fontsize=label_font_size)
+        ax.set_xlabel(xlabel, fontsize=label_font_size)
+        ax.set_xticks(xticks)
+        ax.tick_params(axis='both', labelsize=tick_font_size)
+        ax.set_ylim(axp['ylim'])
+
+    name = "post"
+
+    axes[0].legend(loc="lower left", fontsize=10)
+    plt.subplots_adjust(left=0.12, bottom=0.17, right=0.99, top=0.99, wspace=.34)
+    plot_path = os.path.join(plot_dir, 'mnist_small', name + cfg.ext)
+
     os.makedirs(os.path.dirname(plot_path), exist_ok=True)
     fig.savefig(plot_path)
 
@@ -367,15 +464,29 @@ def _plot_shapes(prior):
 
     fig_unit_size = 3
 
-    fig, axes = grid_subplots(1, n_measures, fig_unit_size)
+    if cfg.version == 1:
+        fig, axes = grid_subplots(1, n_measures+1, fig_unit_size)
+    else:
+        fig, axes = grid_subplots(1, n_measures, fig_unit_size)
     axes = axes.reshape(-1)
 
     data_sets = {key: get_shapes_data(paths, measures, "ci95") for key, paths in data_paths.items()}
 
+    tick_font_size = None
+    label_font_size = 12
+
+    if cfg.version == 1:
+        tick_font_size = 14
+        label_font_size = 14
+
     for (measure, axp), ax in zip(ax_params.items(), axes):
         for (title, kind, max_train_shapes, small), dset in data_sets.items():
             size = "cropped" if small else "full"
-            label = tex("Trained on {} images, {}--{} shapes".format(size, max_train_shapes-9, max_train_shapes,))
+
+            if cfg.version == 1:
+                label = tex("{}, {}--{} shapes".format(size, max_train_shapes-9, max_train_shapes,))
+            else:
+                label = tex("Trained on {} images, {}--{} shapes".format(size, max_train_shapes-9, max_train_shapes,))
 
             x, y, *yerr = dset[measure]
             ls = ':' if small else '-'
@@ -393,21 +504,114 @@ def _plot_shapes(prior):
         if baseline_data is not None:
             ax.plot(*baseline_data[measure], label=baseline_name, ls='--', c='0.5')
 
-        fontsize = 12
-        labelsize = None
-
-        ax.set_ylabel(axp['ylabel'], fontsize=fontsize)
-        ax.tick_params(axis='both', labelsize=labelsize)
-        ax.set_ylim(axp['ylim'])
-        ax.set_xlabel(xlabel, fontsize=fontsize)
+        ax.set_ylabel(axp['ylabel'], fontsize=label_font_size)
+        ax.set_xlabel(xlabel, fontsize=label_font_size)
         ax.set_xticks(xticks)
-
-    axes[0].legend(loc="lower left", fontsize=8)
-    plt.subplots_adjust(left=0.07, bottom=0.15, right=0.98, top=0.94, wspace=.24)
+        ax.tick_params(axis='both', labelsize=tick_font_size)
+        ax.set_ylim(axp['ylim'])
 
     name = "prior" if prior else "post"
 
-    plot_path = os.path.join(plot_dir, 'shapes', name + cfg.ext)
+    if cfg.version == 1:
+        axes[-1].set_axis_off()
+        axes[-2].legend(loc="center left", fontsize=12, bbox_to_anchor=(1.05, 0.5), borderaxespad=0.25)
+        plt.subplots_adjust(left=0.06, bottom=0.17, right=1.0, top=0.94, wspace=.32)
+        plot_path = os.path.join(plot_dir, 'shapes', name + '_version=1' + cfg.ext)
+    else:
+        axes[0].legend(loc="lower left", fontsize=8)
+        plt.subplots_adjust(left=0.07, bottom=0.15, right=0.98, top=0.94, wspace=.24)
+        plot_path = os.path.join(plot_dir, 'shapes', name + cfg.ext)
+
+    os.makedirs(os.path.dirname(plot_path), exist_ok=True)
+    fig.savefig(plot_path)
+
+
+def plot_shapes_small():
+    eval_dir = os.path.join(data_dir, 'shapes/eval')
+
+    data_paths = {
+        ('SILOT', 'silot', 10, True): ['run_env=big-shapes_max-shapes=10_small=True_alg=shapes-silot_duration=long_2019_08_19_17_30_03_seed=0'],
+        # ('SILOT', 'silot', 20, True): ['run_env=big-shapes_max-shapes=20_small=True_alg=shapes-silot_duration=long_2019_08_24_14_26_42_seed=0'],
+        ('SILOT', 'silot', 30, True): ['run_env=big-shapes_max-shapes=30_small=True_alg=shapes-silot_duration=long_2019_08_13_00_01_35_seed=0'],
+        ('SILOT', 'silot', 10, False): [
+            'run_env=big-shapes_max-shapes=10_small=False_alg=shapes-silot_duration=long_2019_08_13_00_00_51_seed=0',
+            'run_env=big-shapes_max-shapes=10_small=False_alg=shapes-silot_duration=long_restart_2019_08_24_14_26_55_seed=0',
+        ],
+        # ('SILOT', 'silot', 20, False): [
+        #     # 'run_env=big-shapes_max-shapes=20_small=False_alg=shapes-silot_duration=long_2019_08_19_17_30_18_seed=0',
+        #     'run_env=big-shapes_max-shapes=20_small=False_alg=shapes-silot_duration=long_restart_2019_08_24_14_27_08_seed=0',
+        # ],
+        ('SILOT', 'silot', 30, False): ['run_env=big-shapes_max-shapes=30_small=False_alg=shapes-silot_duration=long_2019_08_13_00_01_20_seed=0'],
+    }
+
+    data_paths = {
+        k: [os.path.join(eval_dir, d) for d in v]
+        for k, v in data_paths.items()}
+
+    xlabel = '\# Shapes in Test Image'
+    xticks = list(np.arange(0, 36, 5))
+
+    ax_params = OrderedDict({
+        "MOT:mota": dict(ylabel='MOTA', ylim=(-1.05, 1.05)),
+        "AP": dict(ylabel='AP', ylim=(-0.05, 1.05)),
+    })
+
+    baseline_data = {
+        'AP': get_shapes_baseline_data(os.path.join(eval_dir, 'exp_alg=shapes-baseline-AP_2019_08_24_13_38_53_seed=1871884615'), 'AP'),
+        'MOT:mota': get_shapes_baseline_data(os.path.join(eval_dir, 'exp_alg=shapes-baseline-mota_2019_08_24_13_53_45_seed=1780273483'), 'MOT:mota'),
+    }
+
+    baseline_name = 'ConnComp'
+
+    measures = list(ax_params.keys())
+    n_measures = len(measures)
+
+    fig_unit_size = 3
+
+    fig, axes = grid_subplots(1, n_measures, fig_unit_size)
+    axes = axes.reshape(-1)
+
+    data_sets = {key: get_shapes_data(paths, measures, "ci95") for key, paths in data_paths.items()}
+
+    tick_font_size = 14
+    label_font_size = 14
+
+    for (measure, axp), ax in zip(ax_params.items(), axes):
+        for (title, kind, max_train_shapes, small), dset in data_sets.items():
+            size = "cropped" if small else "full"
+
+            label = tex("{}, {}--{} shapes".format(size, max_train_shapes-9, max_train_shapes,))
+            # label = tex("Trained on {} images, {}--{} shapes".format(size, max_train_shapes-9, max_train_shapes,))
+
+            x, y, *yerr = dset[measure]
+            ls = ':' if small else '-'
+            # ls = '-'
+
+            if cfg.fill:
+                line = ax.plot(x, y, label=label, ls=ls)
+                c = line[0].get_c()
+                yu = y + yerr[0]
+                yl = y - yerr[1]
+                ax.fill_between(x, yl, yu, color=c, alpha=0.25)
+            else:
+                ax.errorbar(x, y, yerr=yerr, label=label, ls=ls)
+
+        if baseline_data is not None:
+            ax.plot(*baseline_data[measure], label=baseline_name, ls='--', c='0.5')
+
+        ax.set_ylabel(axp['ylabel'], fontsize=label_font_size)
+        ax.set_xlabel(xlabel, fontsize=label_font_size)
+        ax.set_xticks(xticks)
+        ax.tick_params(axis='both', labelsize=tick_font_size)
+        ax.set_ylim(axp['ylim'])
+
+    name = "post"
+
+    axes[0].legend(loc="lower left", fontsize=10)
+    plt.subplots_adjust(left=0.12, bottom=0.17, right=0.99, top=0.99, wspace=.34)
+    # plt.subplots_adjust(left=0.12, bottom=0.17, right=0.99, top=0.99, wspace=.24)
+    plot_path = os.path.join(plot_dir, 'shapes_small', name + cfg.ext)
+
     os.makedirs(os.path.dirname(plot_path), exist_ok=True)
     fig.savefig(plot_path)
 
@@ -423,19 +627,25 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("plots", nargs='+', help=",".join(sorted(funcs)))
+    args, _ = parser.parse_known_args()
 
+    config = Config(
+        version=0,
+        paper=False,
+        clear_cache=False,
+        no_block=False,
+        show=False,
+        fill=False,
+        ext='.pdf',
+        style='bmh',
+
+    )
+    config.update_from_command_line()
     style_list = ['default', 'classic'] + sorted(style for style in plt.style.available if style != 'classic')
-    parser.add_argument("--style", default="bmh", choices=style_list)
+    assert config.style in style_list
 
-    parser.add_argument("--no-block", action="store_true")
-    parser.add_argument("--show", action="store_true")
-    parser.add_argument("--clear-cache", action="store_true")
-    parser.add_argument("--paper", action="store_true")
-    parser.add_argument("--ext", default=".pdf")
-    parser.add_argument("--fill", action='store_true')
-    args = parser.parse_args()
     plt.rc('lines', linewidth=1)
-    ext = args.ext
+    ext = config.ext
     ext = ext if ext.startswith('.') else '.' + ext
 
     color_cycle = plt.get_cmap("Dark2").colors
@@ -444,15 +654,10 @@ if __name__ == "__main__":
 
     os.makedirs(plot_dir, exist_ok=True)
 
-    if args.clear_cache:
+    if config.clear_cache:
         set_clear_cache(True)
 
-    config = Config(
-        fill=args.fill,
-        ext=ext,
-    )
-
-    with plt.style.context(args.style):
+    with plt.style.context(config.style):
         with config:
             plt.rc('axes', prop_cycle=(cycler('color', color_cycle)))
 
@@ -462,5 +667,5 @@ if __name__ == "__main__":
                 if name in args.plots:
                     fig = do_plot()
 
-                    if args.show:
-                        plt.show(block=not args.no_block)
+                    if config.show:
+                        plt.show(block=not config.no_block)
