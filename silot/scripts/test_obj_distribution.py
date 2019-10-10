@@ -35,4 +35,3 @@ with config:
     ax.bar(support, probs, align='center', alpha=1.0, color='r')
     ax.set_ylim((0, 1))
     plt.show()
-

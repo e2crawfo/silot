@@ -25,8 +25,8 @@ from auto_yolo.models.core import AP, xent_loss, coords_to_pixel_space
 from auto_yolo.models.object_layer import GridObjectLayer, ConvGridObjectLayer, ObjectRenderer
 from auto_yolo.models.networks import SpatialAttentionLayerV2, DummySpatialAttentionLayer
 
-from spair_video.core import VideoNetwork, MOTMetrics, get_object_ids
-from spair_video.propagation import ObjectPropagationLayer, SQAIRPropagationLayer
+from silot.core import VideoNetwork, MOTMetrics, get_object_ids
+from silot.propagation import ObjectPropagationLayer, SQAIRPropagationLayer
 
 
 def get_object_features(objects, use_abs_posn, is_posterior):

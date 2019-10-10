@@ -8,7 +8,7 @@ except ImportError:
 from setuptools import find_packages, setup  # noqa: F811
 
 setup(
-    name='spair_video',
+    name='silot',
     author="Eric Crawford",
     author_email="eric.crawford@mail.mcgill.ca",
     version='0.1',

@@ -14,14 +14,14 @@ from dps.config import DEFAULT_CONFIG
 
 from auto_yolo.models.core import Updater
 
-from spair_video.core import SimpleVideoVAE, SimpleVAE_RenderHook, BackgroundExtractor
-from spair_video.tba import TrackingByAnimation, TBA_Backbone, TBA_RenderHook
-from spair_video.seq_air import SQAIR, SQAIRUpdater, SQAIR_RenderHook
-from spair_video.sspair import SequentialSpair, SequentialSpair_RenderHook
-from spair_video.silot import (
+from silot.core import SimpleVideoVAE, SimpleVAE_RenderHook, BackgroundExtractor
+from silot.tba_model import TrackingByAnimation, TBA_Backbone, TBA_RenderHook
+from silot.sqair_model import SQAIR, SQAIRUpdater, SQAIR_RenderHook
+from silot.sspair_model import SequentialSpair, SequentialSpair_RenderHook
+from silot.silot_model import (
     SILOT, SILOT_RenderHook, SimpleSILOT_RenderHook, PaperSILOT_RenderHook, LongVideoSILOT_RenderHook)
-from spair_video.background_only import BackgroundOnly, BackgroundOnly_RenderHook
-from spair_video.baseline import BaselineTracker, Baseline_RenderHook, BaselineUpdater
+from silot.baseline_model import BaselineTracker, Baseline_RenderHook, BaselineUpdater
+from silot.background_only import BackgroundOnly, BackgroundOnly_RenderHook
 
 
 class MovingMNIST(Environment):
@@ -1331,6 +1331,6 @@ for k, v in alg_configs.items():
 if __name__ == "__main__":
     config = basic_config.copy()
     run_experiment(
-        "test_spair_video", config, "First test of spair_video.",
+        "test_silot", config, "First test of silot.",
         alg_configs=alg_configs, env_configs=env_configs,
         cl_mode='strict')

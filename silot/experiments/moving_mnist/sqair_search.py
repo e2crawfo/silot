@@ -1,6 +1,6 @@
 from dps.hyper import run_experiment
 from dps.utils import copy_update
-from spair_video.run import basic_config, alg_configs, env_configs
+from silot.run import basic_config, alg_configs, env_configs
 import numpy as np
 
 import argparse

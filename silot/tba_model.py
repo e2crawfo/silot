@@ -18,7 +18,7 @@ from dps.utils.tensor_arrays import apply_keys, append_to_tensor_arrays, make_te
 
 from auto_yolo.models.core import xent_loss, AP
 
-from spair_video.core import VideoNetwork, MOTMetrics
+from silot.core import VideoNetwork, MOTMetrics
 
 
 class TBA_Backbone_old(ConvNet):

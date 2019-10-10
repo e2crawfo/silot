@@ -13,7 +13,7 @@ from dps.utils import Param, Config
 from auto_yolo.models.baseline import tf_find_connected_components
 from auto_yolo.models.core import AP, Updater, Evaluator
 
-from spair_video.core import VideoNetwork, coords_to_pixel_space, MOTMetrics
+from silot.core import VideoNetwork, coords_to_pixel_space, MOTMetrics
 
 
 class BaselineAP(AP):

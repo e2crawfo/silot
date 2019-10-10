@@ -8,7 +8,7 @@ from auto_yolo.models.core import xent_loss
 from dps.utils import Param, Config, animate
 from dps.utils.tf import build_scheduled_value, tf_mean_sum, RenderHook
 
-from spair_video.core import VideoNetwork
+from silot.core import VideoNetwork
 
 
 class BackgroundOnly(VideoNetwork):

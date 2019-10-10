@@ -12,7 +12,7 @@ from dps.utils.tf import RenderHook, tf_mean_sum, tf_shape
 from auto_yolo.models.core import AP, xent_loss
 from auto_yolo.models.object_layer import ObjectLayer
 
-from spair_video.core import VideoNetwork
+from silot.core import VideoNetwork
 
 
 class SequentialSpair(VideoNetwork):

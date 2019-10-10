@@ -1,6 +1,6 @@
 import numpy as np
 from dps.hyper import run_experiment
-from spair_video.run import basic_config, alg_configs, env_configs
+from silot.run import basic_config, alg_configs, env_configs
 
 readme = "Running SILOT experiment."
 
@@ -41,6 +41,6 @@ config.update(env_configs['moving_mnist'])
 config.update(alg_configs['exp_silot'])
 
 run_experiment(
-    "test_silot", config, "First test of spair_video.",
+    "test_silot", config, "First test of silot.",
     distributions=distributions, durations=durations
 )

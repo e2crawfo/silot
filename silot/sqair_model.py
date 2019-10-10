@@ -18,7 +18,7 @@ from dps.updater import DataManager
 
 from auto_yolo.models.core import AP, Updater as _Updater, Evaluator
 
-from spair_video.core import VideoNetwork, MOTMetrics
+from silot.core import VideoNetwork, MOTMetrics
 
 from sqair.sqair_modules import FastPropagate, Propagate, FastDiscover, Discover
 from sqair.core import DiscoveryCore, PropagationCore
