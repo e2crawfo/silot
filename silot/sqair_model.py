@@ -108,10 +108,7 @@ class SQAIRUpdater(_Updater):
         return mean
 
     def _build_graph(self):
-        self.data_manager = DataManager(self.env.datasets['train'],
-                                        self.env.datasets['val'],
-                                        self.env.datasets['test'],
-                                        cfg.batch_size)
+        self.data_manager = DataManager(datasets=self.env.datasets)
         self.data_manager.build_graph()
 
         if self.k_particles <= 1:
@@ -343,6 +340,9 @@ class SQAIR(VideoNetwork):
     debug = Param()
     masked_glimpse = Param()
 
+    noisy = Param()
+    eval_noisy = Param()
+
     fast_discovery = Param()
     fast_propagation = Param()
 
@@ -363,8 +363,24 @@ class SQAIR(VideoNetwork):
     # Don't think we need these for this network
     attr_prior_mean = None
     attr_prior_std = None
-    noisy = None
     needs_background = False
+
+    def std_nonlinearity(self, std_logit):
+        # return tf.exp(std)
+        return (
+            self._noisy * 2 * tf.nn.sigmoid(tf.clip_by_value(std_logit, -10, 10))
+            + (1 - self._noisy) * tf.zeros_like(std_logit)
+        )
+
+    def z_nonlinearity(self, z_logit):
+        return tf.nn.sigmoid(tf.clip_by_value(z_logit, -10, 10))
+
+    @property
+    def _noisy(self):
+        return (
+            self.float_is_training * tf.to_float(self.noisy)
+            + (1 - self.float_is_training) * tf.to_float(self.eval_noisy)
+        )
 
     def __init__(self, env, updater, scope=None, **kwargs):
         self._prior_start_step = tf.constant(self.prior_start_step, tf.int32)

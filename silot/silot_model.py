@@ -21,9 +21,10 @@ from dps.utils import Param, map_structure, Config, execute_command, cd
 from dps.utils.tf import RenderHook, tf_mean_sum, tf_shape, MLP
 from dps.utils.tensor_arrays import apply_keys, append_to_tensor_arrays, make_tensor_arrays
 
-from auto_yolo.models.core import AP, xent_loss, coords_to_pixel_space
+from auto_yolo.models.core import AP, xent_loss, coords_to_pixel_space, concrete_binary_sample_kl
 from auto_yolo.models.object_layer import GridObjectLayer, ConvGridObjectLayer, ObjectRenderer
 from auto_yolo.models.networks import SpatialAttentionLayerV2, DummySpatialAttentionLayer
+from auto_yolo.models.obj_kl import ObjKL
 
 from silot.core import VideoNetwork, MOTMetrics, get_object_ids
 from silot.propagation import ObjectPropagationLayer, SQAIRPropagationLayer
@@ -46,6 +47,17 @@ def get_object_features(objects, use_abs_posn, is_posterior):
              objects.z,
              objects.obj,
              prop_state], axis=-1)
+
+
+class PropagationObjKL(ObjKL):
+    def __call__(self, tensors, prior_d_obj_log_odds):
+        kl = concrete_binary_sample_kl(
+            tensors["d_obj_pre_sigmoid"],
+            tensors["d_obj_log_odds"], self.obj_concrete_temp,
+            prior_d_obj_log_odds, self.obj_concrete_temp)
+
+        batch_size = tf_shape(tensors["d_obj_pre_sigmoid"])[0]
+        return tf.reduce_sum(tf.reshape(kl, (batch_size, -1)), 1)
 
 
 def select_top_k_objects(prop, disc):
@@ -138,6 +150,7 @@ class SILOT(VideoNetwork):
     build_backbone = Param()
     build_discovery_feature_fuser = Param()
     build_mlp = Param()
+    build_obj_kl = Param()
 
     n_backbone_features = Param()
     n_objects_per_cell = Param()
@@ -153,11 +166,11 @@ class SILOT(VideoNetwork):
     n_hidden = Param()
     disc_dropout_prob = Param()
     anchor_box = Param()
+    object_shape = Param()
     independent_prop = Param()
     use_sqair_prop = Param()
     conv_discovery = Param()
     use_abs_posn = Param()
-    simple_obj_kl = Param()
 
     disc_layer = None
     disc_feature_extractor = None
@@ -169,6 +182,7 @@ class SILOT(VideoNetwork):
     prop_feature_extractor = None
 
     object_renderer = None
+    obj_kl = None
 
     def __init__(self, *args, **kwargs):
         self._prior_start_step = tf.constant(self.prior_start_step, tf.int32)
@@ -292,10 +306,10 @@ class SILOT(VideoNetwork):
             [object_features_for_disc, self.backbone_output[:, f]], axis=-1)
 
         post_disc_features = self.discovery_feature_fuser(
-            post_disc_features_inp, self.B*self.n_backbone_features, self.is_training)
+            post_disc_features_inp, self.n_backbone_features, self.is_training)
 
         post_disc_features = tf.reshape(
-            post_disc_features, (self.batch_size, self.H, self.W, self.B, self.n_backbone_features))
+            post_disc_features, (self.batch_size, self.H, self.W, self.n_backbone_features))
 
         # --- discovery ---
 
@@ -345,8 +359,8 @@ class SILOT(VideoNetwork):
 
         # --- kl ---
 
-        prop_indep_prior_kl = self.prop_layer.compute_kl(post_prop_objects, do_obj=False)
-        disc_indep_prior_kl = self.disc_layer.compute_kl(post_disc_objects, do_obj=False)
+        prop_indep_prior_kl = self.prop_layer.compute_kl(post_prop_objects)
+        disc_indep_prior_kl = self.disc_layer.compute_kl(post_disc_objects)
 
         obj_for_kl = AttrDict()
         for name in "obj_pre_sigmoid obj_log_odds obj_prob".split():
@@ -354,7 +368,7 @@ class SILOT(VideoNetwork):
                 [post_prop_objects["d_" + name], post_disc_objects[name]], axis=1)
         obj_for_kl['obj'] = tf.concat([post_prop_objects['obj'], post_disc_objects['obj']], axis=1)
 
-        indep_prior_obj_kl = self.disc_layer._compute_obj_kl(obj_for_kl, simple=self.simple_obj_kl)
+        indep_prior_obj_kl = self.obj_kl(obj_for_kl)
 
         _tensors = AttrDict(
             post=AttrDict(
@@ -379,9 +393,11 @@ class SILOT(VideoNetwork):
                 prop=prior_prop_objects
             )
 
-            prop_learned_prior_kl = self.prop_layer.compute_kl(
-                post_prop_objects, prior=prior_prop_objects, do_obj=True)
-            _tensors.update(prop_learned_prior_kl=prop_learned_prior_kl)
+            prop_learned_prior_kl = self.prop_layer.compute_kl(post_prop_objects, prior=prior_prop_objects)
+            prop_learned_prior_kl['d_obj_kl'] = self.learned_prior_obj_kl(
+                post_prop_objects, prior_prop_objects['d_obj_log_odds'])
+
+            _tensors['prop_learned_prior_kl'] = prop_learned_prior_kl
 
         return _tensors
 
@@ -397,7 +413,7 @@ class SILOT(VideoNetwork):
         self.B = self.n_objects_per_cell
 
         self.backbone_output, n_grid_cells, grid_cell_size = self.backbone(
-            self.inp, self.B*self.n_backbone_features, self.is_training)
+            self.inp, self.n_backbone_features, self.is_training)
 
         self.H, self.W = [int(i) for i in n_grid_cells]
         self.HWB = self.H * self.W * self.B
@@ -406,12 +422,12 @@ class SILOT(VideoNetwork):
 
         if self.disc_layer is None:
             if self.conv_discovery:
-                self.disc_layer = ConvGridObjectLayer(self.pixels_per_cell, scope="discovery")
+                self.disc_layer = ConvGridObjectLayer(
+                    flatten=True, pixels_per_cell=self.pixels_per_cell, scope="discovery")
             else:
-                self.disc_layer = GridObjectLayer(self.pixels_per_cell, scope="discovery")
+                self.disc_layer = GridObjectLayer(pixels_per_cell=self.pixels_per_cell, scope="discovery")
 
         if self.prop_layer is None:
-
             if self.prop_cell is None:
                 self.prop_cell = cfg.build_prop_cell(2*self.n_hidden, name="prop_cell")
 
@@ -423,7 +439,6 @@ class SILOT(VideoNetwork):
             self.prop_layer = prop_class(self.prop_cell, scope="propagation")
 
         if self.prior_prop_layer is None and self.learn_prior:
-
             if self.prior_prop_cell is None:
                 self.prior_prop_cell = cfg.build_prop_cell(2*self.n_hidden, name="prior_prop_cell")
 
@@ -431,7 +446,7 @@ class SILOT(VideoNetwork):
             self.prior_prop_layer = prop_class(self.prior_prop_cell, scope="prior_propagation")
 
         if self.object_renderer is None:
-            self.object_renderer = ObjectRenderer(scope="renderer")
+            self.object_renderer = ObjectRenderer(self.anchor_box, self.object_shape, scope="renderer")
 
         if self.disc_feature_extractor is None:
             self.disc_feature_extractor = SpatialAttentionLayerV2(
@@ -456,6 +471,10 @@ class SILOT(VideoNetwork):
                     do_object_wise=True,
                     scope="propagation_feature_extractor",
                 )
+
+        if self.obj_kl is None:
+            self.obj_kl = self.build_obj_kl()
+            self.learned_prior_obj_kl = PropagationObjKL()
 
         # centers of the grid cells in normalized (anchor box) space.
 
@@ -1277,7 +1296,8 @@ class PaperSILOT_RenderHook(SILOT_RenderHook):
             dummy_axis.text(-0.1, 0.5, 'objects', transform=dummy_axis.transAxes, ha='center', va='center', rotation=90)
 
             grid_axes = np.array([
-                [fig.add_subplot(gs[n_cells+i, t*n_cells+j]) for i, j in itertools.product(range(n_visible_rows), range(n_cells))]
+                [fig.add_subplot(gs[n_cells+i, t*n_cells+j])
+                 for i, j in itertools.product(range(n_visible_rows), range(n_cells))]
                 for t in range(T)])
 
             reconstruction_axes = [
@@ -1503,7 +1523,8 @@ class LongVideoSILOT_RenderHook(SILOT_RenderHook):
             shutil.copyfile(path, latest)
 
             to_gif_command = (
-                'ffmpeg  -i latest_stage0000.mp4 -vf "fps=10,scale=1000:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" '
+                'ffmpeg  -i latest_stage0000.mp4 -vf '
+                '"fps=10,scale=1000:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" '
                 '-loop 0 output.gif'
             )
 

@@ -13,6 +13,7 @@ from dps.utils.tf import MLP, CompositeCell, GridConvNet, RecurrentGridConvNet, 
 from dps.config import DEFAULT_CONFIG
 
 from auto_yolo.models.core import Updater
+from auto_yolo.models.obj_kl import SimpleObjKL, SequentialObjKL
 
 from silot.core import SimpleVideoVAE, SimpleVAE_RenderHook, BackgroundExtractor
 from silot.tba_model import TrackingByAnimation, TBA_Backbone, TBA_RenderHook
@@ -193,6 +194,8 @@ basic_config = DEFAULT_CONFIG.copy(
     reconstruction_weight=1.0,
     kl_weight=1.0,
 
+    obj_threshold=0.5,
+
     get_updater=Updater,
     fixed_weights="",
     fixed_values={},
@@ -200,7 +203,6 @@ basic_config = DEFAULT_CONFIG.copy(
 
     annotation_scheme="correct",
     warning_mode="ignore",
-    simple_obj_kl=False,
 )
 
 
@@ -542,6 +544,15 @@ alg_configs['sspair'] = Config(
     # stopping_criteria="AP,max",
     # threshold=np.inf,
 
+    build_obj_kl=SequentialObjKL,
+    SequentialObjKL=dict(
+        use_concrete_kl=False,
+        count_prior_dist=None,
+    ),
+    SimpleObjKL=dict(
+        exp_rate=0.0125,
+    ),
+
     RecurrentGridConvNet=dict(
         bidirectional=False,
         # build_cell=lambda n_hidden, scope: CompositeCell(
@@ -612,8 +623,6 @@ alg_configs['sspair'] = Config(
     # values used in SPAIR
     alpha_logit_scale=0.1,
     alpha_logit_bias=5.0,
-
-    obj_threshold=0.5,
 
     end_training_wheels=1000,
     count_prior_dist=None,
@@ -1007,6 +1016,7 @@ alg_configs['sqair'] = Config(
     # disc_prior_type='cat',
     step_success_prob=0.75,  # Not used when disc_prior_type==cat
 
+    # disc_step_bias=1.,
     disc_step_bias=5.,
     prop_step_bias=5.,
     prop_prior_step_bias=10.,

@@ -170,10 +170,12 @@ def _plot_mnist(prior):
         ('SILOT', 'silot', 6): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=6_alg=conv-silot_duration=long_2019_07_25_22_45_08_seed=0'),
 
         # ('SQAIR (conv)', 'conv_sqair', 12): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=12_alg=conv-sqair_duration=long_2019_07_30_11_35_31_seed=0'),
-        ('SQAIR (conv)', 'conv_sqair', 6): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=6_alg=conv-sqair_duration=long_2019_07_25_22_46_07_seed=0'),
+        # ('SQAIR (conv)', 'conv_sqair', 6): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=6_alg=conv-sqair_duration=long_2019_07_25_22_46_07_seed=0'),
+        ('SQAIR (conv)', 'conv_sqair', 6): os.path.join(eval_dir, 'run_env=moving-mnist-fixed_max-digits=6_alg=conv-sqair_duration=long_2019_11_17_15_52_39_seed=0'),
 
         # ('SQAIR (mlp)', 'sqair', 12): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=12_alg=sqair_duration=long_2019_07_25_22_45_53_seed=0'),
-        ('SQAIR (mlp)', 'sqair', 6): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=6_alg=sqair_duration=long_2019_07_25_22_45_38_seed=0'),
+        # ('SQAIR (mlp)', 'sqair', 6): os.path.join(eval_dir, 'run_env=moving-mnist_max-digits=6_alg=sqair_duration=long_2019_07_25_22_45_38_seed=0'),
+        ('SQAIR (mlp)', 'sqair', 6): os.path.join(eval_dir, 'run_env=moving-mnist-fixed_max-digits=6_alg=sqair_duration=long_2019_11_17_15_52_53_seed=0'),
     }
 
     xlabel = '\# Digits in Test Image'
@@ -230,6 +232,12 @@ def _plot_mnist(prior):
             else:
                 label = tex("{} - trained on 1--{} digits".format(title, max_train_digits))
             x, y, *yerr = dset[measure]
+
+            if measure == 'count_1norm' and 'sqair' in kind:
+                x = x[:6]
+                y = y[:6]
+                yerr[0] = yerr[0][:6]
+                yerr[1] = yerr[1][:6]
 
             ls = '-'
 

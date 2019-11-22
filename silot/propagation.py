@@ -135,9 +135,7 @@ class ObjectPropagationLayer(ObjectLayer):
             d_z_logit_std=self.d_z_prior_std,
         )
 
-    def compute_kl(self, tensors, prior=None, do_obj=True):
-        simple_obj = prior is not None
-
+    def compute_kl(self, tensors, prior=None):
         if prior is None:
             prior = self._independent_prior()
 
@@ -163,16 +161,6 @@ class ObjectPropagationLayer(ObjectLayer):
             d_attr_kl=d_attr_kl,
             d_z_kl=d_z_kl,
         )
-
-        if do_obj:
-            if simple_obj:
-                kl['d_obj_kl'] = concrete_binary_sample_kl(
-                    tensors["d_obj_pre_sigmoid"],
-                    tensors["d_obj_log_odds"], self.obj_concrete_temp,
-                    prior["d_obj_log_odds"], self.obj_concrete_temp,
-                )
-            else:
-                kl['d_obj_kl'] = self._compute_obj_kl(tensors)
 
         return kl
 
@@ -549,6 +537,18 @@ class SQAIRPropagationLayer(ObjectPropagationLayer):
         self.maybe_build_subnet("glimpse_encoder", builder=cfg.build_object_encoder)
 
     def _body(self, inp, features, objects, is_posterior):
+        """
+        Summary of how updates are done for the different variables:
+
+        glimpse': glimpse_params = where + 0.1 * predicted_logit
+
+        where_y/x: new_where_y/x = where_y/x + where_t_scale * tanh(predicted_logit)
+        where_h/w: new_where_h/w_logit = where_h/w_logit + predicted_logit
+        what: Hard to summarize here, taken from SQAIR. Kind of like an LSTM.
+        depth: new_depth_logit = depth_logit + predicted_logit
+        obj: new_obj = obj * sigmoid(predicted_logit)
+
+        """
         batch_size, n_objects, _ = tf_shape(features)
 
         new_objects = AttrDict()
@@ -574,6 +574,7 @@ class SQAIRPropagationLayer(ObjectPropagationLayer):
 
         if is_posterior:
             # --- obtain final parameters for glimpse prime by modifying current pose ---
+
             _yt, _xt, _ys, _xs = tf.split(glimpse_prime_params, 4, axis=-1)
 
             g_yt = cyt + 0.1 * _yt
@@ -598,13 +599,13 @@ class SQAIRPropagationLayer(ObjectPropagationLayer):
         leading_mask_shape = tf_shape(glimpse_prime)[:-1]
         glimpse_prime_mask = tf.reshape(glimpse_prime_mask, (*leading_mask_shape, 1))
 
-        glimpse_prime *= glimpse_prime_mask
-
         new_objects.update(
             glimpse_prime_box=tf.concat([g_yt, g_xt, g_ys, g_xs], axis=-1),
             glimpse_prime=glimpse_prime,
             glimpse_prime_mask=glimpse_prime_mask,
         )
+
+        glimpse_prime *= glimpse_prime_mask
 
         # --- encode glimpse ---
 
