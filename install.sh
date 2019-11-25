@@ -1,5 +1,4 @@
 # Install dps
-cd ../
 git clone https://github.com/e2crawfo/dps.git
 cd dps
 git checkout aaai_2020
@@ -23,6 +22,6 @@ pip install -r requirements.txt
 pip install -e .
 
 # Install silot
-cd silot
+cd  ../
 pip install -r requirements.txt
 pip install -e .
