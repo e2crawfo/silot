@@ -20,14 +20,14 @@ Eric Crawford and Joelle Pineau.
 }
 ```
 
-This repo, and some of those it depends on (dps and auto_yolo) will likely undergo further
+This repo, and some of those it depends on (`dps` and `auto_yolo`), will likely undergo further
 development in the future. We will always attempt to keep the experiments from
 the above paper runnable. However, failing that, one can checkout the branch
-aaai_2020 before running the installation procedure below to get the code
+`aaai_2020` before running the installation procedure below to get the code
 exactly as it was for the paper. Repositories dps and auto_yolo should also be
-on branch aaai_2020 (the install script install.sh installs these repositories
+on branch `aaai_2020` (the install script `install.sh` installs these repositories
 as well, and will attempt to checkout branches in those repos with the same
-name as the current branch for silot).
+name as the current branch for this repo).
 
 ###  Installation:
 1. [Install tensorflow](https://www.tensorflow.org/install/) with [GPU support](https://www.tensorflow.org/install/gpu).
@@ -42,5 +42,6 @@ name as the current branch for silot).
 ```
 cd silot
 python run.py moving_mnist silot
+```
 
 Full experiments in silot/experiments.
