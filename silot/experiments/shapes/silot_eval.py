@@ -1,5 +1,5 @@
 from dps.hyper import run_experiment
-from dps.updater import DummyUpdater
+from dps.tf.updater import DummyUpdater
 from dps.utils import copy_update
 from silot.run import basic_config, alg_configs, env_configs
 

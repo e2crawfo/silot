@@ -14,7 +14,7 @@ from matplotlib.colors import to_rgb
 from dps import cfg
 from dps.utils import Param, Config
 from dps.utils.tf import build_scheduled_value, tf_shape, RenderHook
-from dps.updater import DataManager
+from dps.tf.updater import DataManager
 
 from auto_yolo.models.core import AP, Updater as _Updater, Evaluator
 
@@ -363,7 +363,6 @@ class SQAIR(VideoNetwork):
     # Don't think we need these for this network
     attr_prior_mean = None
     attr_prior_std = None
-    needs_background = False
 
     def std_nonlinearity(self, std_logit):
         # return tf.exp(std)

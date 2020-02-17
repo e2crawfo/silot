@@ -230,8 +230,6 @@ class BaselineTracker(VideoNetwork):
     n_frames_scale = Param()
     colours = Param()
 
-    needs_background = True
-
     def __init__(self, env, updater, scope=None, **kwargs):
         ap_iou_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
         self.eval_funcs = {"AP_at_point_{}".format(int(10 * v)): BaselineAP(v) for v in ap_iou_values}
@@ -249,6 +247,7 @@ class BaselineTracker(VideoNetwork):
 
     def build_representation(self):
         assert cfg.background_cfg.mode == 'colour'
+        self.build_background()
 
         # dummy variable to satisfy dps
         tf.get_variable("dummy", shape=(1,), dtype=tf.float32)
@@ -260,6 +259,7 @@ class BaselineTracker(VideoNetwork):
 
         program_tensors = tf_find_connected_components(
             inp, bg, self.cc_threshold, self.colours, self.cosine_threshold)
+
         self._tensors.update(
             {k: tf.reshape(v, (B, T, *tf_shape(v)[1:]))
              for k, v in program_tensors.items()
@@ -278,11 +278,11 @@ class BaselineTracker(VideoNetwork):
                 n_objects_per_frame=self._tensors["n_objects"],
             )
 
-# vvv To speed up evaluation for bad parameter settings.
-
 
 class BaselineEvaluator(Evaluator):
+
     def _check_continue(self, record):
+        """ speed up evaluation for bad parameter settings """
         return record['n_objects_per_frame'] < 40
 
 

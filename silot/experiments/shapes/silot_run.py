@@ -1,6 +1,6 @@
 from dps.hyper import run_experiment
 from dps.utils import copy_update
-from dps.updater import DummyUpdater
+from dps.tf.updater import DummyUpdater
 from silot.run import basic_config, alg_configs, env_configs, silot_shapes_restart_prepare_func
 
 import argparse

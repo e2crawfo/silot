@@ -39,7 +39,7 @@ durations = dict(
 
 config = basic_config.copy()
 config.update(env_configs['moving_mnist'])
-config.update(alg_configs['conv_silot'], max_digits=args.max_digits)
+config.update(alg_configs['silot'], max_digits=args.max_digits)
 
 run_experiment(
     "moving_mnist_silot",

@@ -151,6 +151,7 @@ class SILOT(VideoNetwork):
     build_discovery_feature_fuser = Param()
     build_mlp = Param()
     build_obj_kl = Param()
+    build_background_model = Param()
 
     n_backbone_features = Param()
     n_objects_per_cell = Param()
@@ -183,6 +184,8 @@ class SILOT(VideoNetwork):
 
     object_renderer = None
     obj_kl = None
+
+    background_model = None
 
     def __init__(self, *args, **kwargs):
         self._prior_start_step = tf.constant(self.prior_start_step, tf.int32)
@@ -233,6 +236,7 @@ class SILOT(VideoNetwork):
         )
 
         structured_result = self._inner_loop_body(f, objects)
+
         tensor_arrays = append_to_tensor_arrays(f, structured_result, tensor_arrays)
         selected_objects = structured_result.selected_objects
 
@@ -343,10 +347,18 @@ class SILOT(VideoNetwork):
 
         selected_objects = select_top_k_objects(prop_objects, disc_objects)
 
+        # --- background prediction ---
+
+        if self.background_model is not None:
+            mask = self.object_renderer(
+                selected_objects, self._tensors["background"][:, f], self.is_training, mask_only=True)
+            background, bg_losses = self.background_model(self._tensors['inp'][:, f], mask)
+        else:
+            background = self._tensors['background'][:, f]
+
         # --- rendering ---
 
-        render_tensors = self.object_renderer(
-            selected_objects, self._tensors["background"][:, f], self.is_training)
+        render_tensors = self.object_renderer(selected_objects, background, self.is_training)
 
         # --- appearance of object sets for plotting ---
 
@@ -407,13 +419,51 @@ class SILOT(VideoNetwork):
     def build_representation(self):
         # --- init modules ---
 
+        """
+        OK so I need to improve background handling.
+        During rendering, I'm going to obtain a mask saying which foreground pixels have been explained.
+
+        How SCALOR does it:
+        background latent variable per timestep.
+        It's an RNN...assume that it takes the foreground mask as input.
+        Yeah, the only way the background latent depends on the foreground objects is through the mask>
+        They concatenate the mask and the input image, pass it through an encoder, and there's your latent variable.
+        Seems like they actually do NOT condition on the background latent variable from the previous timestep.
+        So it's NOT an RNN, even though they say it is at one point.
+
+        They do NOT multiply the input by the mask. I wonder why.
+        If you are going to do it this way...why not just pass the actual input, rather than pass it through an encoder.
+        Because: then what is to stop it from using that mechanism for everything?
+        So...
+
+        We can try making the background encoder really weak.
+        With a very small bottleneck layer. This way it can't model much.
+        It can only model like a few dimensions of variation.
+        We want it to map lots of different things to the same few latent codes. Because the movement of the objects
+        causes lots of variation to deal with.
+
+        Would be cool if we could use like error correcting codes or something. Like...all the pixels that ARE visible
+        are kind of a clue about which background, from a small set of backgrounds, we want to use for the current scene.
+        So here we're thinking like...an associative memory.
+
+        Or even a VQVAE.
+
+        But maybe first I should try what they did...
+
+        So since the background has to condition on the foreground, I have to do the background prediction in the inner loop.
+
+        """
         self.maybe_build_subnet("backbone")
         self.maybe_build_subnet("discovery_feature_fuser")
 
+        if self.build_background_model is not None:
+            self.maybe_build_subnet('background_model')
+
         self.B = self.n_objects_per_cell
 
-        self.backbone_output, n_grid_cells, grid_cell_size = self.backbone(
-            self.inp, self.n_backbone_features, self.is_training)
+        self.backbone_output = self.backbone(self.inp, self.n_backbone_features, self.is_training)
+        n_grid_cells = self.backbone.layer_info[-1]['n_grid_cells']
+        grid_cell_size = self.backbone.layer_info[-1]['grid_cell_size']
 
         self.H, self.W = [int(i) for i in n_grid_cells]
         self.HWB = self.H * self.W * self.B
@@ -681,21 +731,11 @@ class SILOT_RenderHook(RenderHook):
         self._plot(updater, fetched, post=True)
 
         if updater.network.learn_prior and cfg.plot_prior:
-            feed_dict = self.get_feed_dict(updater)
-
-            feed_dict[updater.network._prior_start_step] = updater.network.eval_prior_start_step
-
-            sess = tf.get_default_session()
-            fetched = sess.run(self.to_fetch, feed_dict=feed_dict)
-            fetched = Config(fetched)
+            extra_feed_dict = {updater.network._prior_start_step: updater.network.eval_prior_start_step}
+            fetched = self._fetch(updater, extra_feed_dict)
 
             self._prepare_fetched(updater, fetched)
             self._plot(updater, fetched, post=False)
-
-    @staticmethod
-    def normalize_images(images):
-        mx = images.reshape(*images.shape[:-3], -1).max(axis=-1)
-        return images / mx[..., None, None, None]
 
     def _prepare_fetched(self, updater, fetched):
         inp = fetched['inp']
@@ -1145,15 +1185,10 @@ class SimpleSILOT_RenderHook(SILOT_RenderHook):
         self._plot(updater, fetched, post=True)
 
         if updater.network.learn_prior and cfg.plot_prior:
-            feed_dict = self.get_feed_dict(updater)
+            extra_feed_dict = {updater.network._prior_start_step: updater.network.eval_prior_start_step}
+            fetched = self._fetch(updater, extra_feed_dict)
 
-            feed_dict[updater.network._prior_start_step] = updater.network.eval_prior_start_step
-
-            sess = tf.get_default_session()
-            fetched = sess.run(self.to_fetch, feed_dict=feed_dict)
-            fetched = Config(fetched)
             self._prepare_fetched(updater, fetched)
-
             self._plot(updater, fetched, post=False)
 
     def _prepare_fetched(self, updater, fetched):

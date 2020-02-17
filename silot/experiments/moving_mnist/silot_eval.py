@@ -1,5 +1,5 @@
 from dps.hyper import run_experiment
-from dps.updater import DummyUpdater
+from dps.tf.updater import DummyUpdater
 from silot.run import basic_config, alg_configs, env_configs, silot_mnist_eval_prepare_func
 
 import argparse
@@ -35,7 +35,7 @@ durations = dict(
 
 config = basic_config.copy()
 config.update(env_configs['moving_mnist'])
-config.update(alg_configs['conv_silot'], max_digits=args.max_digits)
+config.update(alg_configs['silot'], max_digits=args.max_digits)
 
 run_experiment(
     "eval_moving_mnist_silot",

@@ -5,11 +5,14 @@ import itertools
 
 from dps import cfg
 from dps.hyper import run_experiment
-from dps.utils import Config, copy_update
+from dps.utils import Config, copy_update, NumpySeed
 from dps.datasets.base import VisualArithmeticDataset, LongVideoVisualArithmetic, Environment
 from dps.datasets.shapes import RandomShapesDataset, LongVideoRandomShapes
-from dps.datasets.atari import AtariVideoDataset, AtariLongVideoVideoDataset
-from dps.utils.tf import MLP, CompositeCell, GridConvNet, RecurrentGridConvNet, ConvNet, tf_shape, LookupSchedule
+from dps.datasets.atari import AtariVideoDataset, AtariLongVideoVideoDataset, count_episodes
+from dps.utils.tf import (
+    MLP, CompositeCell, GridConvNet, TransposeGridConvNet, ConvNet,
+    SpatialBroadcastDecoder, tf_shape, LookupSchedule
+)
 from dps.config import DEFAULT_CONFIG
 
 from auto_yolo.models.core import Updater
@@ -23,6 +26,7 @@ from silot.silot_model import (
     SILOT, SILOT_RenderHook, SimpleSILOT_RenderHook, PaperSILOT_RenderHook, LongVideoSILOT_RenderHook)
 from silot.baseline_model import BaselineTracker, Baseline_RenderHook, BaselineUpdater
 from silot.background_only import BackgroundOnly, BackgroundOnly_RenderHook
+from silot.background import ScalorBackground
 
 
 class MovingMNIST(Environment):
@@ -90,33 +94,43 @@ class MovingShapesLongVideoEnv(Environment):
 class AtariEnv(Environment):
     def __init__(self):
         train_seed, val_seed, test_seed = 0, 1, 2
+        perm_seed = 4
 
-        train_end = cfg.n_episodes - 2*cfg.n_val_episodes
-        val_end = cfg.n_episodes - cfg.n_val_episodes
+        n_episodes = count_episodes(cfg.atari_game, cfg.after_warp)
+
+        with NumpySeed(perm_seed):
+            perm = np.random.permutation(n_episodes)
+
+        n_val_episodes = max(1, int(cfg.val_fraction*n_episodes))
+        train_end = n_episodes - 2*n_val_episodes
+        val_end = n_episodes - n_val_episodes
 
         if cfg.do_train:
             train_episode_range = (None, train_end)
         else:
             train_episode_range = (None, 1)
-
         val_episode_range = (train_end, val_end)
         test_episode_range = (val_end, None)
+
+        train_episode_indices = perm[slice(*train_episode_range)]
+        val_episode_indices = perm[slice(*val_episode_range)]
+        test_episode_indices = perm[slice(*test_episode_range)]
 
         get_annotations = not cfg.do_train
 
         train = AtariVideoDataset(
-            max_examples=int(cfg.n_train), shuffle=True, seed=train_seed,
-            episode_range=train_episode_range, get_annotations=False,
+            max_examples=int(cfg.n_train), seed=train_seed,
+            episode_indices=train_episode_indices, get_annotations=False,
             sample_density=cfg.train_sample_density)
 
         val = AtariVideoDataset(
-            max_examples=int(cfg.n_val), shuffle=True, seed=val_seed,
-            episode_range=val_episode_range, get_annotations=get_annotations,
+            max_examples=int(cfg.n_val), seed=val_seed,
+            episode_indices=val_episode_indices, get_annotations=get_annotations,
             sample_density=cfg.val_sample_density)
 
         test = AtariVideoDataset(
-            max_examples=int(cfg.n_val), shuffle=True, seed=test_seed,
-            episode_range=test_episode_range, get_annotations=get_annotations,
+            max_examples=int(cfg.n_val), seed=test_seed,
+            episode_indices=test_episode_indices, get_annotations=get_annotations,
             sample_density=cfg.val_sample_density)
 
         self.datasets = dict(train=train, val=val, test=test)
@@ -125,10 +139,16 @@ class AtariEnv(Environment):
 class AtariLongVideoEnv(Environment):
     def __init__(self):
         train_seed, val_seed, test_seed = 0, 1, 2
+        perm_seed = 4
 
-        train_end = cfg.n_episodes - 2*cfg.n_val_episodes
-        val_end = cfg.n_episodes - cfg.n_val_episodes
-        train_end = cfg.n_val_episodes
+        n_episodes = count_episodes(cfg.atari_game, cfg.after_warp)
+
+        with NumpySeed(perm_seed):
+            perm = np.random.permutation(n_episodes)
+
+        n_val_episodes = max(1, int(cfg.val_fraction*n_episodes))
+        train_end = n_val_episodes
+        val_end = n_episodes - n_val_episodes
 
         if cfg.do_train:
             train_episode_range = (None, train_end)
@@ -138,16 +158,15 @@ class AtariLongVideoEnv(Environment):
         val_episode_range = (train_end, val_end)
         test_episode_range = (val_end, None)
 
-        train = AtariLongVideoVideoDataset(
-            shuffle=False, seed=train_seed, episode_range=train_episode_range,)
+        train_episode_indices = perm[slice(*train_episode_range)]
+        val_episode_indices = perm[slice(*val_episode_range)]
+        test_episode_indices = perm[slice(*test_episode_range)]
 
-        val = AtariLongVideoVideoDataset(
-            shuffle=False, seed=val_seed, episode_range=val_episode_range,)
-
-        test = AtariLongVideoVideoDataset(
-            shuffle=False, seed=test_seed, episode_range=test_episode_range,)
-
-        self.datasets = dict(train=train, val=val, test=test)
+        self.dataset = dict(
+            train=AtariLongVideoVideoDataset(seed=train_seed, episode_indices=train_episode_indices,),
+            val=AtariLongVideoVideoDataset(seed=val_seed, episode_indices=val_episode_indices,),
+            test=AtariLongVideoVideoDataset(seed=test_seed, episode_indices=test_episode_indices,),
+        )
 
 
 basic_config = DEFAULT_CONFIG.copy(
@@ -353,8 +372,9 @@ env_configs['big_shapes_gen'] = env_configs['big_shapes'].copy(
 # --- ATARI ---
 
 # For eval config, just set postprocessing=""
-atari_train_config = Config(
+env_configs['atari'] = atari_train_config = Config(
     build_env=AtariEnv,
+    atari_game='',
 
     background_cfg=dict(mode="colour", colour="black"),
 
@@ -379,7 +399,7 @@ atari_train_config = Config(
     distance_ord=2,
     average_frames=False,
     crop=None,
-    n_val_episodes=5,
+    val_fraction=0.05,
 )
 
 # --- SPACE INVADERS ---
@@ -400,95 +420,12 @@ env_configs["carnival"] = atari_train_config.copy(
     crop=(30, 215, 0, 160),
 )
 
-# --- ASTEROIDS ---
-
-env_configs["asteroids"] = atari_train_config.copy(
-    atari_game="Asteroids",
-    n_episodes=80,
-    crop=None,
-)
-
-# --- PONG ---
-
-env_configs["pong"] = atari_train_config.copy(
-    # Has a brown background...
-    atari_game="Pong",
-    train_episode_range=(None, 30),
-    val_episode_range=(30, 32),
-    test_episode_range=(32, 34),
-)
-
 # --- DEMON ATTACK ---
 
 env_configs["demon_attack"] = atari_train_config.copy(
     # Object are multicolored, makes everything hard.
     atari_game="DemonAttack",
-    n_episodes=30,
     crop=(0, 190, 0, 160),
-)
-
-# --- ASSAULT ---
-
-env_configs["assault"] = atari_train_config.copy(
-    # Object are multicolored, makes everything hard.
-    atari_game="Assault",
-    train_episode_range=(None, 30),
-    val_episode_range=(30, 32),
-    test_episode_range=(32, 34),
-)
-
-# --- PHOENIX ---
-
-env_configs["phoenix"] = atari_train_config.copy(
-    # Object are multicolored, makes everything hard. Also has white screens sometimes.
-    atari_game="Phoenix",
-    train_episode_range=(None, 30),
-    val_episode_range=(30, 32),
-    test_episode_range=(32, 34),
-)
-
-
-# --- CENTIPEDE ---
-
-env_configs["centipede"] = atari_train_config.copy(
-    atari_game="Centipede",
-    n_episodes=60,
-)
-
-# --- WIZARD OF WOR ---
-
-env_configs["wizard_of_wor"] = atari_train_config.copy(
-    n_episodes=24,
-    n_val_episodes=5,
-    atari_game="WizardOfWor",
-)
-
-# --- VENTURE ---
-
-env_configs["venture"] = atari_train_config.copy(
-    atari_game="Venture",
-    train_episode_range=(None, 30),
-    val_episode_range=(30, 32),
-    test_episode_range=(32, 34),
-)
-
-# --- BERZERK ---
-
-env_configs["berzerk"] = atari_train_config.copy(
-    atari_game="Berzerk",
-    train_episode_range=(None, 30),
-    val_episode_range=(30, 32),
-    test_episode_range=(32, 34),
-)
-
-# --- AIR RAID ---
-# (blue background)
-
-env_configs["air_raid"] = atari_train_config.copy(
-    atari_game="AirRaid",
-    train_episode_range=(None, 30),
-    val_episode_range=(30, 32),
-    test_episode_range=(32, 34),
 )
 
 # --- ALGS ---
@@ -530,6 +467,67 @@ alg_configs['simple_vae'] = Config(
         tf.contrib.rnn.GRUBlockCellV2(128),
         MLP(n_units=[128], scope="GRU"), 2*128),
     render_hook=SimpleVAE_RenderHook(),
+
+    flat_latent=True,
+)
+
+alg_configs['simple_vae_conv'] = alg_configs['simple_vae'].copy(
+    build_encoder=lambda scope: GridConvNet(
+        layers=[
+            dict(filters=64, kernel_size=4, strides=1),
+            dict(filters=64, kernel_size=4, strides=2),
+            dict(filters=64, kernel_size=4, strides=1),
+            dict(filters=64, kernel_size=4, strides=2),
+            dict(filters=64, kernel_size=4, strides=1),
+            dict(filters=64, kernel_size=4, strides=2),
+            dict(filters=64, kernel_size=4, strides=1),
+        ],
+        scope=scope,
+    ),
+    build_decoder=lambda scope: TransposeGridConvNet(
+        layers=[
+            dict(filters=64, kernel_size=3, strides=1),
+            dict(filters=64, kernel_size=3, strides=2),
+            dict(filters=64, kernel_size=3, strides=1),
+            dict(filters=64, kernel_size=3, strides=2),
+            dict(filters=64, kernel_size=3, strides=1),
+            dict(filters=64, kernel_size=3, strides=2),
+            dict(filters=64, kernel_size=3, strides=1),
+        ],
+        scope=scope,
+    ),
+    A=64,
+    initial_n_frames=1,
+    n_frames=1,
+    max_digits=3,
+    build_cell=None,
+)
+
+alg_configs['simple_vae_sbd'] = alg_configs['simple_vae'].copy(
+    build_encoder=lambda scope: ConvNet(
+        layers=[
+            dict(filters=64, kernel_size=4, strides=1),
+            dict(filters=64, kernel_size=4, strides=2),
+            dict(filters=64, kernel_size=4, strides=1),
+            dict(filters=64, kernel_size=4, strides=2),
+            dict(kind='fc', n_units=128),
+            dict(kind='fc', n_units=128),
+            dict(kind='fc', n_units=128, nl='linear'),
+        ],
+        scope=scope,
+    ),
+    build_decoder=lambda scope: SpatialBroadcastDecoder(
+        layers=[
+            dict(filters=128, kernel_size=1, strides=1, padding='SAME'),
+            dict(filters=128, kernel_size=1, strides=1, padding='SAME'),
+            dict(filters=128, kernel_size=1, strides=1, padding='SAME'),
+            dict(filters=3, kernel_size=1, strides=1, padding='SAME'),
+        ],
+        scope=scope,
+    ),
+    initial_n_frames=1,
+    n_frames=1,
+    max_digits=3,
 )
 
 # --- SSPAIR --- (just applying SPAIR separately to each frame)
@@ -553,14 +551,7 @@ alg_configs['sspair'] = Config(
         exp_rate=0.0125,
     ),
 
-    RecurrentGridConvNet=dict(
-        bidirectional=False,
-        # build_cell=lambda n_hidden, scope: CompositeCell(
-        #     tf.contrib.rnn.GRUBlockCellV2(n_hidden),
-        #     MLP(n_units=[n_hidden], scope="GRU"), n_hidden),
-        build_cell=None,
-    ),
-    build_backbone=lambda scope: RecurrentGridConvNet(
+    build_backbone=lambda scope: GridConvNet(
         layers=[
             dict(filters=128, kernel_size=4, strides=3),
             dict(filters=128, kernel_size=4, strides=2),
@@ -636,10 +627,6 @@ alg_configs['sspair'] = Config(
     final_count_prior_log_odds=0.0125,  # log_odds: -4.38, sigmoid: 0.012
 )
 
-alg_configs["indep_sspair"] = alg_configs["sspair"].copy(
-    build_obj_feature_extractor=None,
-)
-
 alg_configs["test_sspair"] = alg_configs["sspair"].copy(
     n_train=1000,
     n_val=16,
@@ -647,7 +634,7 @@ alg_configs["test_sspair"] = alg_configs["sspair"].copy(
     n_frames=2,
     n_backbone_features=32,
     n_passthrough_features=32,
-    build_backbone=lambda scope: RecurrentGridConvNet(
+    build_backbone=lambda scope: GridConvNet(
         bidirectional=True,
         layers=[
             dict(filters=32, kernel_size=4, strides=3),
@@ -713,15 +700,16 @@ alg_configs["silot"] = alg_configs["sspair"].copy(
     build_prop_cell=snt.GRU,
     build_network=SILOT,
     build_mlp=lambda scope: MLP(n_units=[64, 64], scope=scope),
+    build_background_model=None,
 
     n_prop_objects=16,
     n_hidden=64,
     kernel_std=0.1,
 
     d_yx_prior_mean=0.0,
-    d_yx_prior_std=1.0,
+    d_yx_prior_std=0.3,
     d_attr_prior_mean=0.0,
-    d_attr_prior_std=1.0,
+    d_attr_prior_std=0.4,
     d_z_prior_mean=0.0,
     d_z_prior_std=1.0,
 
@@ -737,7 +725,7 @@ alg_configs["silot"] = alg_configs["sspair"].copy(
 
     do_lateral=False,
 
-    conv_discovery=False,
+    conv_discovery=True,
     gate_d_attr=False,
     independent_prop=True,
     use_sqair_prop=True,
@@ -765,15 +753,7 @@ alg_configs["silot"] = alg_configs["sspair"].copy(
             noise_schedule=0.0,
         ),
     ],
-)
 
-alg_configs["exp_silot"] = alg_configs["silot"].copy(
-    d_attr_prior_std=0.4,
-    d_yx_prior_std=0.3,
-)
-
-alg_configs["conv_silot"] = alg_configs["exp_silot"].copy(
-    conv_discovery=True,
     build_conv_lateral=lambda scope: ConvNet(
         scope=scope, layers=[
             dict(filters=None, kernel_size=1, strides=1, padding="SAME"),
@@ -782,7 +762,36 @@ alg_configs["conv_silot"] = alg_configs["exp_silot"].copy(
     ),
 )
 
-alg_configs["conv_silot_plot"] = alg_configs["conv_silot"].copy(
+alg_configs["silot_bg"] = alg_configs["silot"].copy(
+    build_background_model=ScalorBackground,
+
+    ScalorBackground=dict(
+
+        build_background_encoder=lambda scope: ConvNet(
+            layers=[
+                dict(filters=32, kernel_size=4, strides=3),
+                dict(filters=64, kernel_size=4, strides=2),
+                dict(filters=128, kernel_size=4, strides=2),
+                dict(kind='fc', n_units=128),
+                dict(kind='fc', n_units=128),
+                dict(kind='fc', n_units=128, nl='linear'),
+            ],
+            scope=scope,
+        ),
+
+        build_background_decoder=lambda scope: SpatialBroadcastDecoder(
+            layers=[
+                dict(filters=64, kernel_size=1, strides=1, padding='SAME'),
+                dict(filters=64, kernel_size=1, strides=1, padding='SAME'),
+                dict(filters=64, kernel_size=1, strides=1, padding='SAME'),
+            ],
+            scope=scope,
+        ),
+    ),
+
+)
+
+alg_configs["silot_plot"] = alg_configs["silot"].copy(
     render_hook=PaperSILOT_RenderHook(N=16),
     n_train=32,
     do_train=False,
@@ -793,7 +802,7 @@ alg_configs["conv_silot_plot"] = alg_configs["conv_silot"].copy(
     render_first=True,
 )
 
-alg_configs["mnist_long_video_silot"] = alg_configs["conv_silot_plot"].copy(
+alg_configs["mnist_long_video_silot"] = alg_configs["silot_plot"].copy(
     render_hook=LongVideoSILOT_RenderHook(),
     build_env=MovingMNISTLongVideoEnv,
     n_examples=10,
@@ -808,7 +817,7 @@ alg_configs["mnist_long_video_silot"] = alg_configs["conv_silot_plot"].copy(
     obj_threshold=0.5,
 )
 
-alg_configs["shapes_silot"] = alg_configs["conv_silot"].copy(
+alg_configs["shapes_silot"] = alg_configs["silot"].copy(
     color_logit_scale=1.0,
     alpha_logit_scale=1.0,
     alpha_logit_bias=3.0,
@@ -847,7 +856,7 @@ alg_configs["shapes_long_video_silot"] = alg_configs["shapes_eval_silot"].copy(
     obj_threshold=0.05,
 )
 
-alg_configs["atari_train_silot"] = alg_configs["conv_silot"].copy(
+alg_configs["atari_train_silot"] = alg_configs["silot"].copy(
     stopping_criteria="loss_reconstruction,min",
     threshold=-np.inf,
     stage_steps=20000,
@@ -891,36 +900,6 @@ alg_configs["atari_long_video_silot"] = alg_configs["atari_plot_silot"].copy(
     n_batches=20,
     n_samples_per_episode=1,
     shuffle_val=False,
-)
-
-alg_configs["test_silot"] = alg_configs["silot"].copy(
-    build_mlp=lambda scope: MLP(n_units=[32, 32], scope=scope),
-    build_lateral=lambda scope: MLP(n_units=[32, 32], scope=scope),
-    build_object_encoder=lambda scope: MLP(n_units=[64, 64], scope=scope),
-    build_object_decoder=lambda scope: MLP(n_units=[64, 64], scope=scope),
-    build_backbone=lambda scope: RecurrentGridConvNet(
-        bidirectional=True,
-        layers=[
-            dict(filters=32, kernel_size=4, strides=3),
-            dict(filters=32, kernel_size=4, strides=2),
-            dict(filters=32, kernel_size=4, strides=2),
-            dict(filters=32, kernel_size=1, strides=1),
-            dict(filters=32, kernel_size=1, strides=1),
-            dict(filters=32, kernel_size=1, strides=1),
-        ],
-        build_cell=lambda n_hidden, scope: CompositeCell(
-            tf.contrib.rnn.GRUBlockCellV2(n_hidden),
-            MLP(n_units=[n_hidden], scope="GRU"), n_hidden),
-        scope=scope,
-    ),
-    n_train=1000,
-    n_val=16,
-    A=32,
-    n_frames=2,
-    n_backbone_features=32,
-    n_passthrough_features=32,
-    n_hidden=32,
-    n_prop_objects=5,
 )
 
 
@@ -1046,7 +1025,7 @@ alg_configs['sqair'] = Config(
     n_what=50,
     output_scale=0.25,
     output_std=0.3,
-    variable_scope_depth=None,
+    variable_scope_depth=10,
     training_wheels=0.0,
     fixed_presence=False,
 

@@ -32,7 +32,6 @@ Eric Crawford and Joelle Pineau.
 ### Start Training a SILOT model:
 ```
 cd silot
-python run.py moving_mnist conv_silot
-```
+python run.py moving_mnist silot
 
 Full experiments in silot/experiments.

@@ -1,6 +1,6 @@
 from dps.hyper import run_experiment
 from dps.utils import copy_update
-from dps.updater import DummyUpdater
+from dps.tf.updater import DummyUpdater
 from silot.run import basic_config, alg_configs, env_configs
 
 import argparse
@@ -34,7 +34,7 @@ durations = dict(
 
 config = basic_config.copy()
 config.update(env_configs['moving_mnist'])
-config.update(alg_configs['conv_silot'], max_digits=args.max_digits)
+config.update(alg_configs['silot'], max_digits=args.max_digits)
 config.update(final_count_prior_log_odds=0.0125, stage_steps=40000)
 
 run_experiment(

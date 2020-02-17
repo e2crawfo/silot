@@ -147,7 +147,6 @@ class VideoNetwork(TensorRecorder):
     initial_n_frames = Param()
     n_frames_scale = Param()
 
-    needs_background = True
     background_encoder = None
     background_decoder = None
 
@@ -214,7 +213,7 @@ class VideoNetwork(TensorRecorder):
 
         if "background" in data:
             self._tensors.update(
-                background=data["background"],
+                ground_truth_background=data["background"],
             )
 
         if "offset" in data:
@@ -259,8 +258,6 @@ class VideoNetwork(TensorRecorder):
         self.losses = dict()
 
         with tf.variable_scope("representation", reuse=self.initialized):
-            if self.needs_background:
-                self.build_background()
             self.build_representation()
 
         return dict(
@@ -270,126 +267,130 @@ class VideoNetwork(TensorRecorder):
         )
 
     def build_background(self):
-        if self.needs_background:
-            if cfg.background_cfg.mode == "colour":
-                rgb = np.array(to_rgb(cfg.background_cfg.colour))[None, None, None, :]
-                background = rgb * tf.ones_like(self.inp)
+        if cfg.background_cfg.mode == "colour":
+            rgb = np.array(to_rgb(cfg.background_cfg.colour))[None, None, None, :]
+            background = rgb * tf.ones_like(self.inp)
 
-            elif cfg.background_cfg.mode == "learn_solid":
-                # Learn a solid colour for the background
-                self.solid_background_logits = tf.get_variable("solid_background", initializer=[0.0, 0.0, 0.0])
-                if "background" in self.fixed_weights:
-                    tf.add_to_collection(FIXED_COLLECTION, self.solid_background_logits)
-                solid_background = tf.nn.sigmoid(10 * self.solid_background_logits)
-                background = solid_background[None, None, None, :] * tf.ones_like(self.inp)
+        elif cfg.background_cfg.mode == "learn_solid":
+            # Learn a solid colour for the background
+            self.solid_background_logits = tf.get_variable("solid_background", initializer=[0.0, 0.0, 0.0])
+            if "background" in self.fixed_weights:
+                tf.add_to_collection(FIXED_COLLECTION, self.solid_background_logits)
+            solid_background = tf.nn.sigmoid(10 * self.solid_background_logits)
+            background = solid_background[None, None, None, :] * tf.ones_like(self.inp)
 
-            elif cfg.background_cfg.mode == "learn":
-                self.maybe_build_subnet("background_encoder")
-                self.maybe_build_subnet("background_decoder")
+        elif cfg.background_cfg.mode == "scalor":
+            pass
 
-                bg_attr = self.background_encoder(self.inp[:, 0], 2 * cfg.background_cfg.A, self.is_training)
-                bg_attr_mean, bg_attr_log_std = tf.split(bg_attr, 2, axis=-1)
-                bg_attr_std = tf.exp(bg_attr_log_std)
-                if not self.noisy:
-                    bg_attr_std = tf.zeros_like(bg_attr_std)
+        elif cfg.background_cfg.mode == "learn":
+            self.maybe_build_subnet("background_encoder")
+            self.maybe_build_subnet("background_decoder")
 
-                bg_attr, bg_attr_kl = normal_vae(bg_attr_mean, bg_attr_std, self.attr_prior_mean, self.attr_prior_std)
+            # Here I'm just encoding the first frame...
+            bg_attr = self.background_encoder(self.inp[:, 0], 2 * cfg.background_cfg.A, self.is_training)
+            bg_attr_mean, bg_attr_log_std = tf.split(bg_attr, 2, axis=-1)
+            bg_attr_std = tf.exp(bg_attr_log_std)
+            if not self.noisy:
+                bg_attr_std = tf.zeros_like(bg_attr_std)
 
-                self._tensors.update(
-                    bg_attr_mean=bg_attr_mean,
-                    bg_attr_std=bg_attr_std,
-                    bg_attr_kl=bg_attr_kl,
-                    bg_attr=bg_attr)
+            bg_attr, bg_attr_kl = normal_vae(bg_attr_mean, bg_attr_std, self.attr_prior_mean, self.attr_prior_std)
 
-                # --- decode ---
+            self._tensors.update(
+                bg_attr_mean=bg_attr_mean,
+                bg_attr_std=bg_attr_std,
+                bg_attr_kl=bg_attr_kl,
+                bg_attr=bg_attr)
 
-                _, T, H, W, _ = tf_shape(self.inp)
+            # --- decode ---
 
-                background = self.background_decoder(bg_attr, 3, self.is_training)
-                assert len(background.shape) == 2 and background.shape[1] == 3
-                background = tf.nn.sigmoid(tf.clip_by_value(background, -10, 10))
-                background = tf.tile(background[:, None, None, None, :], (1, T, H, W, 1))
+            _, T, H, W, _ = tf_shape(self.inp)
 
-            elif cfg.background_cfg.mode == "learn_and_transform":
-                self.maybe_build_subnet("background_encoder")
-                self.maybe_build_subnet("background_decoder")
+            background = self.background_decoder(bg_attr, 3, self.is_training)
+            assert len(background.shape) == 2 and background.shape[1] == 3
+            background = tf.nn.sigmoid(tf.clip_by_value(background, -10, 10))
+            background = tf.tile(background[:, None, None, None, :], (1, T, H, W, 1))
 
-                # --- encode ---
+        elif cfg.background_cfg.mode == "learn_and_transform":
+            self.maybe_build_subnet("background_encoder")
+            self.maybe_build_subnet("background_decoder")
 
-                n_transform_latents = 4
-                n_latents = (2 * cfg.background_cfg.A, 2 * n_transform_latents)
+            # --- encode ---
 
-                bg_attr, bg_transform_params = self.background_encoder(self.inp, n_latents, self.is_training)
+            n_transform_latents = 4
+            n_latents = (2 * cfg.background_cfg.A, 2 * n_transform_latents)
 
-                # --- bg attributes ---
+            bg_attr, bg_transform_params = self.background_encoder(self.inp, n_latents, self.is_training)
 
-                bg_attr_mean, bg_attr_log_std = tf.split(bg_attr, 2, axis=-1)
-                bg_attr_std = self.std_nonlinearity(bg_attr_log_std)
+            # --- bg attributes ---
 
-                bg_attr, bg_attr_kl = normal_vae(bg_attr_mean, bg_attr_std, self.attr_prior_mean, self.attr_prior_std)
+            bg_attr_mean, bg_attr_log_std = tf.split(bg_attr, 2, axis=-1)
+            bg_attr_std = self.std_nonlinearity(bg_attr_log_std)
 
-                # --- bg location ---
+            bg_attr, bg_attr_kl = normal_vae(bg_attr_mean, bg_attr_std, self.attr_prior_mean, self.attr_prior_std)
 
-                bg_transform_params = tf.reshape(
-                    bg_transform_params,
-                    (self.batch_size, self.dynamic_n_frames, 2*n_transform_latents))
+            # --- bg location ---
 
-                mean, log_std = tf.split(bg_transform_params, 2, axis=2)
-                std = self.std_nonlinearity(log_std)
+            bg_transform_params = tf.reshape(
+                bg_transform_params,
+                (self.batch_size, self.dynamic_n_frames, 2*n_transform_latents))
 
-                logits, kl = normal_vae(mean, std, 0.0, 1.0)
+            mean, log_std = tf.split(bg_transform_params, 2, axis=2)
+            std = self.std_nonlinearity(log_std)
 
-                # integrate across timesteps
-                logits = tf.cumsum(logits, axis=1)
-                logits = tf.reshape(logits, (self.batch_size*self.dynamic_n_frames, n_transform_latents))
+            logits, kl = normal_vae(mean, std, 0.0, 1.0)
 
-                y, x, h, w = tf.split(logits, n_transform_latents, axis=1)
-                h = (0.9 - 0.5) * tf.nn.sigmoid(h) + 0.5
-                w = (0.9 - 0.5) * tf.nn.sigmoid(w) + 0.5
-                y = (1 - h) * tf.nn.tanh(y)
-                x = (1 - w) * tf.nn.tanh(x)
+            # integrate across timesteps
+            logits = tf.cumsum(logits, axis=1)
+            logits = tf.reshape(logits, (self.batch_size*self.dynamic_n_frames, n_transform_latents))
 
-                # --- decode ---
+            y, x, h, w = tf.split(logits, n_transform_latents, axis=1)
+            h = (0.9 - 0.5) * tf.nn.sigmoid(h) + 0.5
+            w = (0.9 - 0.5) * tf.nn.sigmoid(w) + 0.5
+            y = (1 - h) * tf.nn.tanh(y)
+            x = (1 - w) * tf.nn.tanh(x)
 
-                background = self.background_decoder(bg_attr, self.image_depth, self.is_training)
-                bg_shape = cfg.background_cfg.bg_shape
-                background = background[:, :bg_shape[0], :bg_shape[1], :]
-                assert background.shape[1:3] == bg_shape
-                background_raw = tf.nn.sigmoid(tf.clip_by_value(background, -10, 10))
+            # --- decode ---
 
-                transform_constraints = snt.AffineWarpConstraints.no_shear_2d()
+            background = self.background_decoder(bg_attr, self.image_depth, self.is_training)
+            bg_shape = cfg.background_cfg.bg_shape
+            background = background[:, :bg_shape[0], :bg_shape[1], :]
+            assert background.shape[1:3] == bg_shape
+            background_raw = tf.nn.sigmoid(tf.clip_by_value(background, -10, 10))
 
-                warper = snt.AffineGridWarper(
-                    bg_shape, (self.image_height, self.image_width), transform_constraints)
+            transform_constraints = snt.AffineWarpConstraints.no_shear_2d()
 
-                transforms = tf.concat([w, x, h, y], axis=-1)
-                grid_coords = warper(transforms)
+            warper = snt.AffineGridWarper(
+                bg_shape, (self.image_height, self.image_width), transform_constraints)
 
-                grid_coords = tf.reshape(
-                    grid_coords,
-                    (self.batch_size, self.dynamic_n_frames, *tf_shape(grid_coords)[1:]))
+            transforms = tf.concat([w, x, h, y], axis=-1)
+            grid_coords = warper(transforms)
 
-                background = tf.contrib.resampler.resampler(background_raw, grid_coords)
+            grid_coords = tf.reshape(
+                grid_coords,
+                (self.batch_size, self.dynamic_n_frames, *tf_shape(grid_coords)[1:]))
 
-                self._tensors.update(
-                    bg_attr_mean=bg_attr_mean,
-                    bg_attr_std=bg_attr_std,
-                    bg_attr_kl=bg_attr_kl,
-                    bg_attr=bg_attr,
-                    bg_y=tf.reshape(y, (self.batch_size, self.dynamic_n_frames, 1)),
-                    bg_x=tf.reshape(x, (self.batch_size, self.dynamic_n_frames, 1)),
-                    bg_h=tf.reshape(h, (self.batch_size, self.dynamic_n_frames, 1)),
-                    bg_w=tf.reshape(w, (self.batch_size, self.dynamic_n_frames, 1)),
-                    bg_transform_kl=kl,
-                    bg_raw=background_raw,
-                )
+            background = tf.contrib.resampler.resampler(background_raw, grid_coords)
 
-            elif cfg.background_cfg.mode == "data":
-                background = self._tensors["background"]
-            else:
-                raise Exception("Unrecognized background mode: {}.".format(cfg.background_cfg.mode))
+            self._tensors.update(
+                bg_attr_mean=bg_attr_mean,
+                bg_attr_std=bg_attr_std,
+                bg_attr_kl=bg_attr_kl,
+                bg_attr=bg_attr,
+                bg_y=tf.reshape(y, (self.batch_size, self.dynamic_n_frames, 1)),
+                bg_x=tf.reshape(x, (self.batch_size, self.dynamic_n_frames, 1)),
+                bg_h=tf.reshape(h, (self.batch_size, self.dynamic_n_frames, 1)),
+                bg_w=tf.reshape(w, (self.batch_size, self.dynamic_n_frames, 1)),
+                bg_transform_kl=kl,
+                bg_raw=background_raw,
+            )
 
-            self._tensors["background"] = background[:, :self.dynamic_n_frames]
+        elif cfg.background_cfg.mode == "data":
+            background = self._tensors["ground_truth_background"]
+
+        else:
+            raise Exception("Unrecognized background mode: {}.".format(cfg.background_cfg.mode))
+
+        self._tensors["background"] = background[:, :self.dynamic_n_frames]
 
 
 class BackgroundExtractor(RecurrentGridConvNet):
@@ -412,7 +413,7 @@ class BackgroundExtractor(RecurrentGridConvNet):
             self.transform_head = MLP(n_units=[64, 64], scope="transform_head")
 
         n_attr_channels, n_transform_values = output_size
-        processed, n_grid_cells, grid_cell_size = super()._call(inp, n_attr_channels, is_training)
+        processed = super()._call(inp, n_attr_channels, is_training)
         B, F, H, W, C = tf_shape(processed)
 
         # Map processed to shapes (B, H, W, C) and (B, F, 2)
@@ -449,11 +450,11 @@ class SimpleVideoVAE(VideoNetwork):
     build_encoder = Param()
     build_decoder = Param()
     build_cell = Param()
+    flat_latent = Param()
 
     encoder = None
     decoder = None
     cell = None
-    needs_background = False
 
     def __init__(self, env, updater, scope=None, **kwargs):
         super().__init__(env, updater, scope=scope)
@@ -476,7 +477,7 @@ class SimpleVideoVAE(VideoNetwork):
             if "encoder" in self.fixed_weights:
                 self.encoder.fix_variables()
 
-        if self.cell is None:
+        if self.cell is None and self.build_cell is not None:
             self.cell = cfg.build_cell(scope="cell")
             if "cell" in self.fixed_weights:
                 self.cell.fix_variables()
@@ -488,14 +489,35 @@ class SimpleVideoVAE(VideoNetwork):
 
         # --- encode ---
 
-        video = tf.reshape(self.inp, (self.batch_size * self.dynamic_n_frames, *self.obs_shape[1:]))
+        inp_trailing_shape = tf_shape(self.inp)[2:]
+        video = tf.reshape(self.inp, (self.batch_size * self.dynamic_n_frames, *inp_trailing_shape))
         encoder_output = self.encoder(video, 2 * self.A, self.is_training)
-        encoder_output = tf.layers.flatten(encoder_output)
-        encoder_output = tf.reshape(encoder_output, (self.batch_size, self.dynamic_n_frames, encoder_output.shape[1]))
 
-        attr, final_state = dynamic_rnn(
-            self.cell, encoder_output, initial_state=self.cell.zero_state(self.batch_size, tf.float32),
-            parallel_iterations=1, swap_memory=False, time_major=False)
+        eo_trailing_shape = tf_shape(encoder_output)[1:]
+        encoder_output = tf.reshape(
+            encoder_output, (self.batch_size, self.dynamic_n_frames, *eo_trailing_shape))
+
+        if self.cell is None:
+            attr = encoder_output
+        else:
+
+            if self.flat_latent:
+                n_trailing_dims = int(np.prod(eo_trailing_shape))
+                encoder_output = tf.reshape(
+                    encoder_output, (self.batch_size, self.dynamic_n_frames, n_trailing_dims))
+            else:
+                raise Exception("NotImplemented")
+
+                n_objects = int(np.prod(eo_trailing_shape[:-1]))
+                D = eo_trailing_shape[-1]
+                encoder_output = tf.reshape(
+                    encoder_output, (self.batch_size, self.dynamic_n_frames, n_objects, D))
+
+            encoder_output = tf.layers.flatten(encoder_output)
+
+            attr, final_state = dynamic_rnn(
+                self.cell, encoder_output, initial_state=self.cell.zero_state(self.batch_size, tf.float32),
+                parallel_iterations=1, swap_memory=False, time_major=False)
 
         attr_mean, attr_log_std = tf.split(attr, 2, axis=-1)
         attr_std = tf.math.softplus(attr_log_std)
@@ -509,11 +531,11 @@ class SimpleVideoVAE(VideoNetwork):
 
         # --- decode ---
 
-        decoder_input = tf.reshape(attr, (self.batch_size*self.dynamic_n_frames, attr.shape[2]))
+        decoder_input = tf.reshape(attr, (self.batch_size*self.dynamic_n_frames, *tf_shape(attr)[2:]))
 
-        reconstruction = self.decoder(decoder_input, self.inp.shape[2:], self.is_training)
+        reconstruction = self.decoder(decoder_input, tf_shape(self.inp)[2:], self.is_training)
         reconstruction = reconstruction[:, :self.obs_shape[1], :self.obs_shape[2], :]
-        reconstruction = tf.reshape(reconstruction, (self.batch_size, *self.obs_shape))
+        reconstruction = tf.reshape(reconstruction, (self.batch_size, self.dynamic_n_frames, *self.obs_shape[1:]))
 
         reconstruction = tf.nn.sigmoid(tf.clip_by_value(reconstruction, -10, 10))
         self._tensors["output"] = reconstruction
@@ -529,19 +551,11 @@ class SimpleVideoVAE(VideoNetwork):
 
 
 class SimpleVAE_RenderHook(RenderHook):
+    fetches = "inp output".split()
+
     def __call__(self, updater):
-        self.fetches = "inp output"
-
-        if 'prediction' in updater.network._tensors:
-            self.fetches += " prediction targets"
-
         fetched = self._fetch(updater)
         self._plot_reconstruction(updater, fetched)
-
-    @staticmethod
-    def normalize_images(images):
-        mx = images.reshape(*images.shape[:-3], -1).max(axis=-1)
-        return images / mx[..., None, None, None]
 
     def _plot_reconstruction(self, updater, fetched):
         inp = fetched['inp']
@@ -553,19 +567,8 @@ class SimpleVAE_RenderHook(RenderHook):
         diff = self.normalize_images(np.abs(inp - output).sum(axis=-1, keepdims=True) / output.shape[-1])
         xent = self.normalize_images(xent_loss(pred=output, label=inp, tf=False).sum(axis=-1, keepdims=True))
 
-        path = self.path_for("animation", updater, "gif")
-        fig, axes, anim = animate(
+        path = self.path_for("animation", updater, ext=None)
+        fig, axes, anim, path = animate(
             inp, output, diff.astype('f'), xent.astype('f'),
             figsize=(fig_width, fig_height), path=path)
         plt.close()
-
-        # prediction = fetched.get("prediction", None)
-        # targets = fetched.get("targets", None)
-        # if targets is not None:
-        #     _target = targets[n]
-        #     _prediction = prediction[n]
-
-        #     title = "target={}, prediction={}".format(np.argmax(_target), np.argmax(_prediction))
-        #     ax.set_title(title)
-
-        # self.savefig("sampled_reconstruction", fig, updater)
