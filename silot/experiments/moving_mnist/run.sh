@@ -24,5 +24,7 @@
 # python sqair_eval.py long --max-digits=6
 # python sqair_eval.py long --max-digits=12
 # python sqair_eval.py long --max-digits=6 --conv
-python sqair_eval.py long --max-digits=12 --conv
+# python sqair_eval.py long --max-digits=12 --conv
 # python sqair_eval.py build --max-digits=6
+python sqair_eval.py long --max-digits=6 --conv
+python sqair_eval.py long --max-digits=6

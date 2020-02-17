@@ -350,7 +350,7 @@ class SQAIR(VideoNetwork):
     n_layers = Param()
 
     transform_var_bias = Param()
-    n_steps_per_image = Param()
+    n_objects = Param()
     scale_prior = Param()
     rec_where_prior = Param()
 
@@ -446,13 +446,13 @@ class SQAIR(VideoNetwork):
             if self.fast_discovery:
                 object_state_predictor = MLP([256, 256, self.n_hidden])
                 discover = FastDiscover(
-                    object_state_predictor, self.n_steps_per_image, discover_cell,
+                    object_state_predictor, self.n_objects, discover_cell,
                     step_success_prob=self.step_success_prob, where_mean=[*self.scale_prior, 0, 0],
                     disc_prior_type=self.disc_prior_type, rec_where_prior=self.rec_where_prior)
 
             else:
                 discover = Discover(
-                    self.n_steps_per_image, discover_cell, step_success_prob=self.step_success_prob,
+                    self.n_objects, discover_cell, step_success_prob=self.step_success_prob,
                     where_mean=[*self.scale_prior, 0, 0], disc_prior_type=self.disc_prior_type,
                     rec_where_prior=self.rec_where_prior)
 
@@ -493,7 +493,7 @@ class SQAIR(VideoNetwork):
             time_cell = self.time_rnn_class(self.n_hidden)
 
             sequence_apdr = SequentialAIR(
-                self.n_steps_per_image, self.object_shape, discover, propagate,
+                self.n_objects, self.object_shape, discover, propagate,
                 time_cell, decoder, prior_start_step=self._prior_start_step)
 
         outputs = sequence_apdr(processed_image)

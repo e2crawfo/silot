@@ -213,8 +213,6 @@ basic_config = DEFAULT_CONFIG.copy(
     reconstruction_weight=1.0,
     kl_weight=1.0,
 
-    obj_threshold=0.5,
-
     get_updater=Updater,
     fixed_weights="",
     fixed_values={},
@@ -222,6 +220,9 @@ basic_config = DEFAULT_CONFIG.copy(
 
     annotation_scheme="correct",
     warning_mode="ignore",
+    simple_obj_kl=False,
+
+    obj_threshold=0.5,
 )
 
 
@@ -945,7 +946,6 @@ def silot_shapes_restart_prepare_func():
 
 def sqair_prepare_func():
     from dps import cfg
-    cfg.n_steps_per_image = cfg.n_objects
     cfg.patience_start = 4 * cfg.stage_steps
 
 
@@ -1003,7 +1003,7 @@ alg_configs['sqair'] = Config(
 
     masked_glimpse=True,
     k_particles=2,
-    n_steps_per_image=12,
+    n_objects=12,
     sample_from_prior=False,
     rec_where_prior=True,
     scale_prior=(-2., -2.),
