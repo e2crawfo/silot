@@ -24,7 +24,7 @@ make
 cd ../../../
 
 # Optional: install SQAIR.
-echo "*** Installing auto_yolo on branch "$GIT_BRANCH
+echo "*** Installing sqair on branch "$GIT_BRANCH
 cd ../
 git clone https://github.com/e2crawfo/sqair.git
 cd sqair
