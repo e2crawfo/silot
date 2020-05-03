@@ -394,7 +394,6 @@ class SILOT(VideoNetwork):
 
             prop_indep_prior_kl=prop_indep_prior_kl,
             disc_indep_prior_kl=disc_indep_prior_kl,
-
             indep_prior_obj_kl=indep_prior_obj_kl,
 
             **render_tensors,
