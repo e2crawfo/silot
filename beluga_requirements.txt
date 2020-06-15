@@ -1,6 +1,10 @@
+# attrdict, for sqair
+/home/e2crawfo/downloaded_wheels/attrdict-2.0.1-py2.py3-none-any.whl
 dill
-dm-sonnet>=1.17
+# dm-sonnet>=1.17,<2.0.0
+/home/e2crawfo/downloaded_wheels/dm_sonnet-1.36-py3-none-any.whl
 flake8
+# gast==0.2.2  # tf 1.14 incompatible with gast>=3, but tf 1.14 specifies gast>=0.2.0
 gym
 iso8601
 imageio
@@ -8,10 +12,12 @@ ipdb
 ipython
 matplotlib
 numpy>=1.7
-orderedattrdict
+# orderedattrdict, for sqair
+/home/e2crawfo/downloaded_wheels/orderedattrdict-1.5.1-py2.py3-none-any.whl
 pandas==0.24.1
 psutil
 scikit-image
 tabulate
-tensorflow_gpu==1.14.1
-torch==1.4
+tensorflow_gpu==1.13.1
+# tensorflow_probability
+/home/e2crawfo/downloaded_wheels/tensorflow_probability-0.6.0-py2.py3-none-any.whl

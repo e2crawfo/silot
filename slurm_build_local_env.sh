@@ -14,10 +14,12 @@ cd /home/e2crawfo/spair_video/clify
 pip install -e .
 
 cd /home/e2crawfo/spair_video/auto_yolo/
-pip install -r requirements.txt
 pip install -e .
 
 cd /home/e2crawfo/spair_video/dps
+pip install -e .
+
+cd /home/e2crawfo/spair_video/sqair
 pip install -e .
 
 cd /home/e2crawfo/spair_video/silot
