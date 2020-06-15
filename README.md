@@ -38,10 +38,16 @@ name as the current branch for this repo).
 
 3. Install a version of `tensorflow_probability` that matches your version of tensorflow (0.6 works for tensorflow 1.13, increment by 0.1 for each 0.1 increment of tf version).
 
-### Start Training a SILOT model:
+### Start Training a SILOT model on Moving MNIST:
 ```
 cd silot
 python run.py moving_mnist silot
+```
+
+### SILOT on Atari
+```
+cd silot
+python run.py space_invaders silot
 ```
 
 Full experiments in silot/experiments.

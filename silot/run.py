@@ -403,8 +403,6 @@ env_configs['atari'] = atari_train_config = Config(
     val_fraction=0.05,
 )
 
-# --- SPACE INVADERS ---
-
 env_configs["space_invaders"] = atari_train_config.copy(
     atari_game="SpaceInvaders",
     n_episodes=37,
@@ -413,7 +411,11 @@ env_configs["space_invaders"] = atari_train_config.copy(
     anchor_box=(24, 24),
 )
 
-# --- CARNIVAL ---
+env_configs["asteroids"] = atari_train_config.copy(
+    atari_game="Asteroids",
+    n_episodes=80,
+    crop=None,
+)
 
 env_configs["carnival"] = atari_train_config.copy(
     atari_game="Carnival",
@@ -421,12 +423,9 @@ env_configs["carnival"] = atari_train_config.copy(
     crop=(30, 215, 0, 160),
 )
 
-# --- DEMON ATTACK ---
-
-env_configs["demon_attack"] = atari_train_config.copy(
-    # Object are multicolored, makes everything hard.
-    atari_game="DemonAttack",
-    crop=(0, 190, 0, 160),
+env_configs["wizard_of_wor"] = atari_train_config.copy(
+    n_episodes=24,
+    atari_game="WizardOfWor",
 )
 
 # --- ALGS ---

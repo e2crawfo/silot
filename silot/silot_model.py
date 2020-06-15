@@ -415,40 +415,6 @@ class SILOT(VideoNetwork):
     def build_representation(self):
         # --- init modules ---
 
-        """
-        OK so I need to improve background handling.
-        During rendering, I'm going to obtain a mask saying which foreground pixels have been explained.
-
-        How SCALOR does it:
-        background latent variable per timestep.
-        It's an RNN...assume that it takes the foreground mask as input.
-        Yeah, the only way the background latent depends on the foreground objects is through the mask>
-        They concatenate the mask and the input image, pass it through an encoder, and there's your latent variable.
-        Seems like they actually do NOT condition on the background latent variable from the previous timestep.
-        So it's NOT an RNN, even though they say it is at one point.
-
-        They do NOT multiply the input by the mask. I wonder why.
-        If you are going to do it this way...why not just pass the actual input, rather than pass it through an encoder.
-        Because: then what is to stop it from using that mechanism for everything?
-        So...
-
-        We can try making the background encoder really weak.
-        With a very small bottleneck layer. This way it can't model much.
-        It can only model like a few dimensions of variation.
-        We want it to map lots of different things to the same few latent codes. Because the movement of the objects
-        causes lots of variation to deal with.
-
-        Would be cool if we could use like error correcting codes or something. Like...all the pixels that ARE visible
-        are kind of a clue about which background, from a small set of backgrounds, we want to use for the current scene.
-        So here we're thinking like...an associative memory.
-
-        Or even a VQVAE.
-
-        But maybe first I should try what they did...
-
-        So since the background has to condition on the foreground, I have to do the background prediction in the inner loop.
-
-        """
         self.maybe_build_subnet("backbone")
         self.maybe_build_subnet("discovery_feature_fuser")
 
