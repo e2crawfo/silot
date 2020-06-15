@@ -423,7 +423,15 @@ class SILOT(VideoNetwork):
 
         self.B = self.n_objects_per_cell
 
-        self.backbone_output = self.backbone(self.inp, self.n_backbone_features, self.is_training)
+        batch_size, T, *rest = tf_shape(self.inp)
+        _inp = tf.reshape(self.inp, (batch_size*T, *rest))
+
+        backbone_output = self.backbone(_inp, self.n_backbone_features, self.is_training)
+        output_shape = tf_shape(backbone_output)
+        rest = output_shape[1:]
+
+        self.backbone_output = tf.reshape(backbone_output, (batch_size, T, *rest))
+
         n_grid_cells = self.backbone.layer_info[-1]['n_grid_cells']
         grid_cell_size = self.backbone.layer_info[-1]['grid_cell_size']
 
