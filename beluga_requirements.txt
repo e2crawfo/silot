@@ -1,0 +1,17 @@
+dill
+dm-sonnet>=1.17
+flake8
+gym
+iso8601
+imageio
+ipdb
+ipython
+matplotlib
+numpy>=1.7
+orderedattrdict
+pandas==0.24.1
+psutil
+scikit-image
+tabulate
+tensorflow_gpu==1.14.1
+torch==1.4
