@@ -4,11 +4,10 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgb
 from tensorflow.python.ops.rnn import dynamic_rnn
 import sonnet as snt
-from orderedattrdict import AttrDict
 import motmetrics as mm
 
 from dps import cfg
-from dps.utils import Param, animate
+from dps.utils import Param, animate, AttrDict
 from dps.utils.tf import (
     build_scheduled_value, FIXED_COLLECTION, tf_mean_sum, MLP,
     RenderHook, tf_shape, ConvNet, RecurrentGridConvNet,

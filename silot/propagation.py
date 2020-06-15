@@ -1,16 +1,15 @@
 import tensorflow as tf
 import tensorflow_probability as tfp
 import sonnet as snt
-from orderedattrdict import AttrDict
 
 Normal = tfp.distributions.Normal
 
 from dps import cfg
-from dps.utils import Param
+from dps.utils import Param, AttrDict
 from dps.utils.tf import tf_shape, apply_object_wise, MLP
 
 from auto_yolo.tf_ops import resampler_edge
-from auto_yolo.models.core import concrete_binary_pre_sigmoid_sample, coords_to_image_space, concrete_binary_sample_kl
+from auto_yolo.models.core import concrete_binary_pre_sigmoid_sample, coords_to_image_space
 from auto_yolo.models.object_layer import ObjectLayer
 from auto_yolo.models.networks import SpatialAttentionLayerV2
 

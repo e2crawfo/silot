@@ -1,7 +1,6 @@
 import tensorflow as tf
 import numpy as np
 from functools import partial
-from orderedattrdict import AttrDict
 import itertools
 import shutil
 import os
@@ -12,7 +11,7 @@ import matplotlib.patches as patches
 from matplotlib.colors import to_rgb
 
 from dps import cfg
-from dps.utils import Param, Config
+from dps.utils import Param, Config, AttrDict
 from dps.utils.tf import build_scheduled_value, tf_shape, RenderHook
 from dps.tf.updater import DataManager
 
@@ -24,7 +23,7 @@ from sqair.sqair_modules import FastPropagate, Propagate, FastDiscover, Discover
 from sqair.core import DiscoveryCore, PropagationCore
 from sqair.modules import (
     Encoder, StochasticTransformParam, FixedStepsPredictor, StepsPredictor,
-    Decoder, AIRDecoder, AIREncoder, SpatialTransformer
+    Decoder, AIRDecoder, AIREncoder
 )
 from sqair.seq import SequentialAIR
 from sqair.propagate import make_prior

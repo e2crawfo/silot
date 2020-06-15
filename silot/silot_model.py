@@ -2,7 +2,6 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
 from itertools import product
-from orderedattrdict import AttrDict
 import pprint
 import shutil
 import os
@@ -17,7 +16,7 @@ import matplotlib.patches as patches
 from matplotlib.colors import to_rgb
 
 from dps import cfg
-from dps.utils import Param, map_structure, Config, execute_command, cd
+from dps.utils import Param, map_structure, Config, execute_command, cd, AttrDict
 from dps.utils.tf import RenderHook, tf_mean_sum, tf_shape, MLP
 from dps.utils.tensor_arrays import apply_keys, append_to_tensor_arrays, make_tensor_arrays
 
@@ -400,9 +399,7 @@ class SILOT(VideoNetwork):
         )
 
         if self.learn_prior:
-            _tensors.prior = AttrDict(
-                prop=prior_prop_objects
-            )
+            _tensors.prior = AttrDict(prop=prior_prop_objects)
 
             prop_learned_prior_kl = self.prop_layer.compute_kl(post_prop_objects, prior=prior_prop_objects)
             prop_learned_prior_kl['d_obj_kl'] = self.learned_prior_obj_kl(
