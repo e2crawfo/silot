@@ -1,3 +1,10 @@
+# custom
+dps/
+auto_yolo/
+sqair/
+*dps_data
+*atari_rollouts
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -102,7 +109,3 @@ venv.bak/
 
 # mypy
 .mypy_cache/
-
-dps/
-auto_yolo/
-sqair/

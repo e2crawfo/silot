@@ -149,6 +149,8 @@ class VideoNetwork(TensorRecorder):
     background_encoder = None
     background_decoder = None
 
+    needs_background = True
+
     eval_funcs = dict()
 
     def __init__(self, env, updater, scope=None, **kwargs):
@@ -257,6 +259,9 @@ class VideoNetwork(TensorRecorder):
         self.losses = dict()
 
         with tf.variable_scope("representation", reuse=self.initialized):
+            if self.needs_background:
+                self.build_background()
+
             self.build_representation()
 
         return dict(
@@ -450,6 +455,8 @@ class SimpleVideoVAE(VideoNetwork):
     build_decoder = Param()
     build_cell = Param()
     flat_latent = Param()
+
+    needs_background = False
 
     encoder = None
     decoder = None

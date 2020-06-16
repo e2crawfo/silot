@@ -363,6 +363,8 @@ class SQAIR(VideoNetwork):
     attr_prior_mean = None
     attr_prior_std = None
 
+    needs_background = False
+
     def std_nonlinearity(self, std_logit):
         # return tf.exp(std)
         return (

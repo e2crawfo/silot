@@ -5,7 +5,7 @@ import itertools
 
 from dps import cfg
 from dps.hyper import run_experiment
-from dps.utils import Config, copy_update, NumpySeed
+from dps.utils import Config, copy_update, NumpySeed, get_default_config
 from dps.datasets.base import VisualArithmeticDataset, LongVideoVisualArithmetic, Environment
 from dps.datasets.shapes import RandomShapesDataset, LongVideoRandomShapes
 from dps.datasets.atari import AtariVideoDataset, AtariLongVideoVideoDataset, count_episodes
@@ -13,7 +13,6 @@ from dps.utils.tf import (
     MLP, CompositeCell, GridConvNet, TransposeGridConvNet, ConvNet,
     SpatialBroadcastDecoder, tf_shape, LookupSchedule
 )
-from dps.config import DEFAULT_CONFIG
 
 from auto_yolo.models.core import Updater
 from auto_yolo.models.obj_kl import SimpleObjKL, SequentialObjKL
@@ -169,7 +168,12 @@ class AtariLongVideoEnv(Environment):
         )
 
 
+DEFAULT_CONFIG = get_default_config()
+
+
 basic_config = DEFAULT_CONFIG.copy(
+    scratch_dir='./dps_data',
+
     use_gpu=True,
     gpu_allow_growth=True,
     stopping_criteria="loss,min",
@@ -376,6 +380,7 @@ env_configs['big_shapes_gen'] = env_configs['big_shapes'].copy(
 env_configs['atari'] = atari_train_config = Config(
     build_env=AtariEnv,
     atari_game='',
+    atari_data_dir='./atari_rollouts/atari_rollouts',
 
     background_cfg=dict(mode="colour", colour="black"),
 

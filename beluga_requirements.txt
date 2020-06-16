@@ -4,7 +4,6 @@ dill
 # dm-sonnet>=1.17,<2.0.0
 /home/e2crawfo/downloaded_wheels/dm_sonnet-1.36-py3-none-any.whl
 flake8
-# gast==0.2.2  # tf 1.14 incompatible with gast>=3, but tf 1.14 specifies gast>=0.2.0
 gym
 iso8601
 imageio

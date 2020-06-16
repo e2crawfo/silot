@@ -202,6 +202,8 @@ class TrackingByAnimation(VideoNetwork):
     attr_prior_std = None
     noisy = None
 
+    needs_background = False
+
     def __init__(self, env, updater, scope=None, **kwargs):
         super().__init__(env, updater, scope=scope)
 
