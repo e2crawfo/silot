@@ -24,7 +24,7 @@ This repo, and some of those it depends on (`dps` and `auto_yolo`), will likely 
 development in the future. We will always attempt to keep the experiments from
 the above paper runnable. However, failing that, one can checkout the branch
 `aaai_2020` before running the installation procedure below to get the code
-exactly as it was for the paper. Repositories dps and auto_yolo should also be
+exactly as it was for the paper. Repo `dps` and `auto_yolo` should also be
 on branch `aaai_2020` (the install script `install.sh` installs these repositories
 as well, and will attempt to checkout branches in those repos with the same
 name as the current branch for this repo).
@@ -33,18 +33,28 @@ name as the current branch for this repo).
 1. [Install tensorflow](https://www.tensorflow.org/install/) with [GPU support](https://www.tensorflow.org/install/gpu).
    SILOT was developed with tensorflow 1.13.2 and CUDA 10.0; no guarantees that it will work
    with other versions. In particular, versions of tensorflow >= 1.14 introduce changes to the process of building custom
-   tensorflow ops (of which this repo relies on 2, both in the `auto_yolo` dependency) which this repo does not yet take into account.
+   tensorflow ops (of which this repo relies on 2, both in the `auto_yolo` dependency, see below) which this repo does not yet take into account.
+
+   Example:
+   ```
+   pip install tensorflow_gpu==1.13.2
+   ```
 
 2. `sh install.sh`
 
-This downloads a number of dependency repos and installs them and their dependencies. These repos are created inside
-the silot repo, but are not tracked by the silot repo (this is achieved by .gitignore).
+   This downloads a number of dependency repos and installs them and *their* dependencies. These repos are created inside
+   the SILOT repo, but are not *tracked* by the SILOT repo (achieved by .gitignore).
 
-  1. dps: custom framework for managing datasets and the training loop.
-  2. auto_yolo: tensorflow implementation of SPAIR, which is used roughly as a sub-module within silot.
-  3. sqair: tensorflow implementation of Sequential Attend, Infer, Repeat, a predecessor of SILOT.
+   1. `dps`: custom framework for managing datasets and the training loop.
+   2. `auto_yolo`: tensorflow implementation of SPAIR, which is used roughly as a sub-module within SILOT.
+   3. `sqair`: tensorflow implementation of Sequential Attend, Infer, Repeat, a predecessor of SILOT.
 
 3. Install a version of `tensorflow_probability` that matches your version of tensorflow (0.6 works for tensorflow 1.13, increment by 0.1 for each 0.1 increment of tf version).
+
+   Example:
+   ```
+   pip install tensorflow_probability==0.6
+   ```
 
 ## Training SILOT
 
@@ -54,26 +64,37 @@ cd silot
 python run.py moving_mnist silot
 ```
 When this is run for the first time, `dps` will download EMNIST data required
-for building the Moving MNIST dataset.
+for building the Moving MNIST dataset. It will also create a dataset of 60,000
+examples, which can take a while. To use fewer examples, one can do:
+```
+python run.py moving_mnist silot --n-train=1000
+```
 
 ### Moving Shapes
 ```
 cd silot
-python run.py moving_shapes silot
+python run.py shapes shapes_silot
+```
+This will create a dataset of 60,000 examples, which can take a while. To use fewer examples, one can do:
+```
+python run.py shapes shapes_silot --n-train=1000
 ```
 
 ### Atari
 We first need to download the atari data and unzip it before we can run silot on it.
-
 ```
 sh download_atari_data.sh
 ```
+This downloads atari data (in the form of a github repo called `atari_rollouts`)
+into the current working directory; silot assumes this is done inside the `silot/silot` directory
+(i.e. the same directory where the `run.py` script lives). If you want to download the data
+into another location, you'll need to tell silot where the data lives, which
+can be achieved by editing the `atari_data_dir` variable in `run.py`.
 
-We can then run silot on any of `asteroids, carnival, space_invaders,
-wizard_of_wor`, e.g.:
-
+We can then run silot on any of `asteroids, carnival, space_invaders, wizard_of_wor`.
+E.g.:
 ```
-python run.py space_invaders silot
+python run.py space_invaders atari_train_silot
 ```
 
 ## Viewing Results
