@@ -13,7 +13,7 @@ pip install --no-index -r beluga_requirements.txt
 cd /home/e2crawfo/spair_video/clify
 pip install -e .
 
-cd /home/e2crawfo/spair_video/auto_yolo/
+cd /home/e2crawfo/spair_video/auto_yolo
 pip install -e .
 
 cd /home/e2crawfo/spair_video/dps

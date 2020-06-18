@@ -13,7 +13,7 @@ matplotlib
 numpy>=1.7
 # orderedattrdict, for sqair
 /home/e2crawfo/downloaded_wheels/orderedattrdict-1.5.1-py2.py3-none-any.whl
-pandas==0.24.1
+pandas==1.0.3
 psutil
 scikit-image
 tabulate

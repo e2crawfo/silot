@@ -1,9 +1,11 @@
-MAX_VERSION=1.13
-VALID_TF_VERSION=$(python -c "import tensorflow as tf; from pkg_resources import parse_version; print(parse_version(tf.VERSION) < parse_version('$MAX_VERSION'))")
+set -e
+
+TF_VERSION_UPPER_BOUND=1.14
+VALID_TF_VERSION=$(python -c "import tensorflow as tf; from pkg_resources import parse_version; print(parse_version(tf.VERSION) < parse_version('$TF_VERSION_UPPER_BOUND'))")
 
 if [ $VALID_TF_VERSION != "True" ]; then
   TF_VERSION=$(python -c "import tensorflow as tf; print(tf.VERSION)")
-  echo "Version $TF_VERSION too new, must be < $MAX_VERSION. See README.md for explanation."
+  echo "Version $TF_VERSION too new, must be < $TF_VERSION_UPPER_BOUND. See README.md for explanation."
 fi
 
 GIT_BRANCH=$(git branch | sed -n '/\* /s///p')

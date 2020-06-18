@@ -53,6 +53,8 @@ the silot repo, but are not tracked by the silot repo (this is achieved by .giti
 cd silot
 python run.py moving_mnist silot
 ```
+When this is run for the first time, `dps` will download EMNIST data required
+for building the Moving MNIST dataset.
 
 ### Moving Shapes
 ```
