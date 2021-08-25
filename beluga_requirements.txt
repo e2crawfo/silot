@@ -17,6 +17,6 @@ pandas==1.0.3
 psutil
 scikit-image
 tabulate
-tensorflow_gpu==1.13.1
+tensorflow_gpu==2.5.1
 # tensorflow_probability
 /home/e2crawfo/downloaded_wheels/tensorflow_probability-0.6.0-py2.py3-none-any.whl
